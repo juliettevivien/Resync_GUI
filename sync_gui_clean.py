@@ -794,7 +794,7 @@ class SyncGUI(QMainWindow):
         # Iterate over the extracted DataFrames
         for df_name, df_data in extracted_streams.items():
             # Generate the filename
-            external_title = ("SYNCHRONIZED_EXTERNAL_" + str(self.dataset_extra.file_name[:-4]) + ".pkl")
+            external_title = (f"{df_name}SYNCHRONIZED_EXTERNAL_" + str(self.dataset_extra.file_name[:-4]) + ".pkl")
             # Create the full path to the file
             if self.folder_path is not None:
                 filepath = join(self.folder_path, external_title)

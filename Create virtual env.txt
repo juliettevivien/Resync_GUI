@@ -4,4 +4,5 @@ conda activate resync_gui
 pip install mne
 pip install mnelab
 pip install PyQt5
+pip install pymatreader
 conda install pandas

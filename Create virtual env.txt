@@ -2,7 +2,8 @@ In anaconda prompt, once you are in your repo directory:
 conda create --name resync_gui python==3.10.9
 conda activate resync_gui
 pip install mne
-pip install mnelab
 pip install PyQt5
 pip install pymatreader
 conda install pandas
+pip install pyxdf
+

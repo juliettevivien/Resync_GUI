@@ -1,6 +1,8 @@
 """
 TO DO: 
     - re-assess external sampling frequency, is not 2048Hz exactly !!!
+    - Modify  synchronize_datasets_as_pickles function to work properly !!! 
+    Use the other button for now instead: all as one .pickle
 """
 
 
@@ -125,8 +127,14 @@ class SyncGUI(QMainWindow):
         # Save both as .pickle files
         self.btn_sync_as_pickle = Button("both as .pickle", "lightyellow")
         self.btn_sync_as_pickle.setEnabled(False)
-        self.btn_sync_as_pickle.clicked.connect(self.synchronize_datasets_as_pickle) 
+        self.btn_sync_as_pickle.clicked.connect(self.synchronize_datasets_as_pickles) 
         saving_layout.addWidget(self.btn_sync_as_pickle)
+
+        # Save everything together in one pickle file
+        self.btn_all_as_pickle = Button("all as one .pickle", "lightyellow")
+        self.btn_all_as_pickle.setEnabled(False)
+        self.btn_all_as_pickle.clicked.connect(self.synchronize_datasets_as_one_pickle)
+        saving_layout.addWidget(self.btn_all_as_pickle)
 
         main_layout.addLayout(saving_layout)
 
@@ -637,9 +645,11 @@ class SyncGUI(QMainWindow):
         if self.dataset_intra.art_start is not None and self.dataset_extra.art_start is not None:
             self.btn_sync_as_set.setEnabled(True)
             self.btn_sync_as_pickle.setEnabled(True)
+            self.btn_all_as_pickle.setEnabled(True)
         else:
             self.btn_sync_as_set.setEnabled(False)
             self.btn_sync_as_pickle.setEnabled(False)
+            self.btn_all_as_pickle.setEnabled(False)
 
 
 
@@ -699,7 +709,7 @@ class SyncGUI(QMainWindow):
 
     
 
-    def synchronize_datasets_as_pickle(self):
+    def synchronize_datasets_as_pickles(self): ## THIS FUNCTION DOES NOT WORK PROPERLY
         ## Intracranial ##
         # Crop beginning of LFP intracranial recording 1 second before first artifact:
         time_start_LFP_0 = self.dataset_intra.art_start - 1  # 1s before first artifact
@@ -710,9 +720,7 @@ class SyncGUI(QMainWindow):
         LFP_cropped = LFP_array[:, int(index_start_LFP) :].T
         LFP_df_offset = pd.DataFrame(LFP_cropped)
         LFP_df_offset.columns = self.dataset_intra.ch_names
-        LFP_timescale_offset_s = np.arange(
-            0, ((len(LFP_df_offset)-0.5) / self.dataset_intra.sf), 1 / self.dataset_intra.sf
-        )
+        LFP_timescale_offset_s = self.dataset_intra.times[int(index_start_LFP):] - time_start_LFP_0
 
         # Save as pickle file:
         LFP_df_offset["sf_LFP"] = self.dataset_intra.sf
@@ -805,6 +813,138 @@ class SyncGUI(QMainWindow):
         QMessageBox.information(self, "Synchronization", "Synchronization done. Both files saved as .pickle")
 
 
+
+    def synchronize_datasets_as_one_pickle(self):
+        ## Intracranial ##
+        # Crop beginning of LFP intracranial recording 1 second before first artifact:
+        time_start_LFP_0 = self.dataset_intra.art_start - 1  # 1s before first artifact
+        index_start_LFP = time_start_LFP_0 * (self.dataset_intra.sf)
+
+        LFP_array = self.dataset_intra.raw_data.get_data()
+
+        LFP_cropped = LFP_array[:, int(index_start_LFP) :].T
+        LFP_df_offset = pd.DataFrame(LFP_cropped)
+        LFP_df_offset.columns = self.dataset_intra.ch_names
+        LFP_timescale_offset_s = self.dataset_intra.times[int(index_start_LFP):] - time_start_LFP_0
+
+        # Prepare LFP dataframe
+        LFP_df_offset["sf_LFP"] = self.dataset_intra.sf
+        LFP_df_offset["time_stamp"] = LFP_timescale_offset_s
+
+
+        ## External ##
+        stream_names = []
+        stream_ids = []
+        streams_dict = {}
+
+        filepath = join(self.dataset_extra.file_path, self.dataset_extra.file_name)
+        xdf_datas = XdfData(filepath).resolve_streams()
+
+        for streams in range(1, len(xdf_datas['name'])+1, 1):
+            stream_names.append(xdf_datas['name'][streams])
+
+        for name in stream_names:
+            stream_ids.append(xdf_datas[xdf_datas['name'] == name].index[0])
+
+        for stream_nb in zip(stream_names, stream_ids):
+            # create a dictionnary associating each streaming name from stream_names list to its corresponding stream_id:
+            streams_dict[stream_nb[0]] = stream_nb[1]
+
+        # LOAD ALL STREAMS IN A DICTIONNARY
+        streams = {}
+
+        for idx, (name, stream_id) in enumerate(streams_dict.items(), start=1):
+            stream_name = f"{name}_stream"
+            streams[stream_name] = XdfData(filepath).load(stream_id=[stream_id])
+
+        # CREATE GLOBAL VARIABLES FOR EACH STREAM
+        for stream_name, stream_data in streams.items():
+            globals()[stream_name] = stream_data.data()
+            print(stream_name)
+
+        # Convert self.dataset_extra.art_start into the xdf timescale from the BIP data
+        art_start_0 = self.dataset_extra.art_start - 1
+        # Get the original timestamps from both sources
+        timestamps_global = globals()['SAGA_stream']['time_stamp']
+        times_real = self.dataset_extra.times
+
+        # Find the index in self.dataset_extra.times corresponding to art_start_0
+        art_start_index = (times_real >= art_start_0).argmax()
+
+        # Filter the timestamps from the global clock based on this index
+        filtered_timestamps_global = timestamps_global[art_start_index:]
+        art_start_in_globals = np.array(filtered_timestamps_global.iloc[0])
+        print(f"Art start in global timestamps: {art_start_in_globals}")
+
+
+        # Iterate over the dynamically created variables
+        for stream_name in streams.keys():
+            # Find the index corresponding to the value of art_start_in_globals
+            index = np.argmax(globals()[stream_name]['time_stamp'] >= art_start_in_globals)
+            print(f"Index corresponding to art_start_in_globals in {stream_name}: {index}")
+
+            # Crop the stream data from the index onwards
+            stream_offset = globals()[stream_name].iloc[index:]
+
+            # Create a copy of the cropped stream data
+            stream_offset_copy = stream_offset.copy()
+
+            # Offset the 'time_stamp' column
+            stream_offset_copy['time_stamp'] = stream_offset_copy['time_stamp'] - art_start_in_globals
+            
+            # Reset the index
+            stream_offset_copy.reset_index(drop=True, inplace=True)
+            
+            # Update the global variable with the modified data
+            globals()[stream_name] = stream_offset_copy
+
+        # Create a dictionary to hold the extracted DataFrames
+        extracted_streams = {}
+
+        # Iterate over the dynamically created variables
+        for stream_name in streams.keys():
+            # Extract the current stream DataFrame
+            extracted_streams[f"df_{stream_name}"] = globals()[stream_name].copy()
+
+
+        # Iterate over the extracted DataFrames
+        for df_name, df_data in extracted_streams.items():
+            # Create separate DataFrame variables with specific names
+            globals()[df_name] = pd.DataFrame(df_data)
+
+
+        # Create an empty list to hold the DataFrames
+        all_dfs = []
+
+        # Iterate over the extracted DataFrames
+        for df_name, df_data in extracted_streams.items():
+            # Create a DataFrame with a MultiIndex containing the df_name as the top level
+            df = pd.DataFrame(df_data)
+            df.columns = pd.MultiIndex.from_product([[df_name], df.columns])  # Add df_name as the top level of column index
+            all_dfs.append(df)
+
+        # Concatenate all DataFrames in the list along axis 1 (columns)
+        LSL_df = pd.concat(all_dfs, axis=1)
+
+        # Assuming LFP_df_offset is your new DataFrame
+        # First, adjust its column names to include a MultiIndex with the header 'LFP'
+        LFP_df_offset.columns = pd.MultiIndex.from_product([['df_LFP'], LFP_df_offset.columns])
+
+        # Concatenate LFP_df_offset on top of big_df along axis 1 (columns)
+        final_df = pd.concat([LFP_df_offset, LSL_df], axis=1)
+        
+        ## saving as pickle:
+        # Generate the filename
+        filename = f"{self.dataset_extra.file_name[:-4]}_synchronized_data.pkl"
+        # Create the full path to the file
+        if self.folder_path is not None:
+            filepath = join(self.folder_path, filename)
+        else:
+            filepath = filename
+        # Save the DataFrame to a pickle file
+        final_df.to_pickle(filepath)
+        print(f"DataFrame {filename} saved as pickle to {filepath}")
+        QMessageBox.information(self, "Synchronization", "Synchronization done. Everything saved as one .pickle file")
 
 
     def detrend_data(self, channel_data):

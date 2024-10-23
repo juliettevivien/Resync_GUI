@@ -373,7 +373,7 @@ class SyncGUI(QMainWindow):
                     closest_index_x = np.argmin(np.abs(timescale - event.xdata))
                     closest_value_x = timescale[closest_index_x]
                     closest_value_y = data[closest_index_x]
-                    plus_symbol.set_data(closest_value_x, closest_value_y)
+                    plus_symbol.set_data([closest_value_x], [closest_value_y])
                     self.canvas_xdf.draw()
                     self.dataset_intra.art_start = closest_value_x
                     self.label_manual_artifact_time_mat.setText(f"Selected Artifact start: {closest_value_x} s")

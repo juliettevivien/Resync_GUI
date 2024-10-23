@@ -111,7 +111,6 @@ class SyncGUI(QMainWindow):
         # Add the horizontal panel layout to the main layout
         main_layout.addLayout(panel_layout)
 
-
         # Create and add the Synchronize and saving buttons
         self.label_sync_and_save = QLabel('Synchronize and save as:')
         self.label_sync_and_save.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
@@ -119,19 +118,19 @@ class SyncGUI(QMainWindow):
         saving_layout = QHBoxLayout()
 
         # Save both files as .set files    
-        self.btn_sync_as_set = Button("both as .SET", "lightyellow")
+        self.btn_sync_as_set = Button("separately as .SET files", "lightyellow")
         self.btn_sync_as_set.setEnabled(False)
         self.btn_sync_as_set.clicked.connect(self.synchronize_datasets_as_set) 
         saving_layout.addWidget(self.btn_sync_as_set)
 
         # Save both as .pickle files
-        self.btn_sync_as_pickle = Button("both as .pickle", "lightyellow")
+        self.btn_sync_as_pickle = Button("separately as .pkl files", "lightyellow")
         self.btn_sync_as_pickle.setEnabled(False)
         self.btn_sync_as_pickle.clicked.connect(self.synchronize_datasets_as_pickles) 
         saving_layout.addWidget(self.btn_sync_as_pickle)
 
         # Save everything together in one pickle file
-        self.btn_all_as_pickle = Button("all as one .pickle", "lightyellow")
+        self.btn_all_as_pickle = Button("all as one .pkl", "lightyellow")
         self.btn_all_as_pickle.setEnabled(False)
         self.btn_all_as_pickle.clicked.connect(self.synchronize_datasets_as_one_pickle)
         saving_layout.addWidget(self.btn_all_as_pickle)
@@ -142,7 +141,6 @@ class SyncGUI(QMainWindow):
         container = QWidget()
         container.setLayout(main_layout)
         self.setCentralWidget(container)
-
 
         # Initialize datasets objects
         self.dataset_intra = DataSet()  # Dataset for the intracranial recording (STN recordings from Percept). Should be .mat file
@@ -765,15 +763,26 @@ class SyncGUI(QMainWindow):
             globals()[stream_name] = stream_data.data()
             print(stream_name)
 
+        # Convert self.dataset_extra.art_start into the xdf timescale from the BIP data
+        art_start_0 = self.dataset_extra.art_start - 1
+        # Get the original timestamps from both sources
+        timestamps_global = globals()['SAGA_stream']['time_stamp']
+        times_real = self.dataset_extra.times
+
+        # Find the index in self.dataset_extra.times corresponding to art_start_0
+        art_start_index = (times_real >= art_start_0).argmax()
+
+        # Filter the timestamps from the global clock based on this index
+        filtered_timestamps_global = timestamps_global[art_start_index:]
+        art_start_in_globals = np.array(filtered_timestamps_global.iloc[0])
+        print(f"Art start in global timestamps: {art_start_in_globals}")
+
 
         # Iterate over the dynamically created variables
         for stream_name in streams.keys():
-            # Calculate the reset array for the current stream
-            stream_array_reset = globals()[stream_name]['time_stamp'] - (self.dataset_extra.art_start - 1)
-            
-            # Find the index of the first timepoint >= 0
-            index = np.argmax(stream_array_reset >= 0)
-            print(f"First timepoint >= 0 in {stream_name}: {index}")
+            # Find the index corresponding to the value of art_start_in_globals
+            index = np.argmax(globals()[stream_name]['time_stamp'] >= art_start_in_globals)
+            print(f"Index corresponding to art_start_in_globals in {stream_name}: {index}")
             
             # Crop the stream data from the index onwards
             stream_offset = globals()[stream_name].iloc[index:]
@@ -782,7 +791,7 @@ class SyncGUI(QMainWindow):
             stream_offset_copy = stream_offset.copy()
             
             # Offset the 'time_stamp' column
-            stream_offset_copy['time_stamp'] = stream_offset_copy['time_stamp'] - (self.dataset_extra.art_start - 1)
+            stream_offset_copy['time_stamp'] = stream_offset_copy['time_stamp'] - art_start_in_globals
             
             # Reset the index
             stream_offset_copy.reset_index(drop=True, inplace=True)
@@ -810,7 +819,7 @@ class SyncGUI(QMainWindow):
                 filepath = external_title
             # Save the DataFrame to a pickle file
             df_data.to_pickle(filepath)
-        QMessageBox.information(self, "Synchronization", "Synchronization done. Both files saved as .pickle")
+        QMessageBox.information(self, "Synchronization", "Synchronization done. All files saved separately as .pickle")
 
 
 

@@ -200,6 +200,7 @@ class SyncGUI(QMainWindow):
 
         self.btn_select_last_art_mat = Button("Select last artifact in intracranial recording", "lightblue")
         self.btn_select_last_art_mat.clicked.connect(self.select_last_artifact_mat)
+        self.btn_select_last_art_mat.setEnabled(False)
         layout_second_page_selection_mat.addWidget(self.btn_select_last_art_mat)
 
         self.label_select_last_art_mat = QLabel("No artifact selected")
@@ -209,6 +210,7 @@ class SyncGUI(QMainWindow):
 
         self.btn_select_last_art_xdf = Button("Select last artifact in extracranial recording", "lightgreen")
         self.btn_select_last_art_xdf.clicked.connect(self.select_last_artifact_ext)
+        self.btn_select_last_art_xdf.setEnabled(False)
         layout_second_page_selection_xdf.addWidget(self.btn_select_last_art_xdf)
 
         self.label_select_last_art_xdf = QLabel("No artifact selected")
@@ -222,6 +224,7 @@ class SyncGUI(QMainWindow):
         layout_timeshift = QHBoxLayout()
         self.btn_compute_timeshift = Button("Compute timeshift", "lightyellow")
         self.btn_compute_timeshift.clicked.connect(self.compute_timeshift)
+        self.btn_compute_timeshift.setEnabled(False)
         layout_timeshift.addWidget(self.btn_compute_timeshift)
 
         self.label_timeshift = QLabel("No timeshift computed")
@@ -472,9 +475,10 @@ class SyncGUI(QMainWindow):
                     self.canvas_xdf.draw()
                     self.dataset_intra.art_start = closest_value_x
                     self.label_manual_artifact_time_mat.setText(f"Selected Artifact start: {closest_value_x} s")
+                    self.update_synchronize_button_state()
 
         self.canvas_mat.mpl_connect("button_press_event", onclick)
-        self.update_synchronize_button_state()
+        
     
 
 
@@ -733,23 +737,6 @@ class SyncGUI(QMainWindow):
         self.canvas_xdf.mpl_connect("button_press_event", onclick)
         self.update_synchronize_button_state()
     
-
-
-    def update_synchronize_button_state(self):
-        """Enable or disable the synchronize button based on file selection."""
-        if self.dataset_intra.art_start is not None and self.dataset_extra.art_start is not None:
-            self.btn_sync_as_set.setEnabled(True)
-            self.btn_sync_as_pickle.setEnabled(True)
-            self.btn_all_as_pickle.setEnabled(True)
-            self.switch_to_second_page_button.setEnabled(True)
-            self.switch_to_second_page_button.setEnabled(True)
-        else:
-            self.btn_sync_as_set.setEnabled(False)
-            self.btn_sync_as_pickle.setEnabled(False)
-            self.btn_all_as_pickle.setEnabled(False)
-            self.switch_to_second_page_button.setEnabled(False)
-            self.switch_to_second_page_button.setEnabled(False)
-
 
 
     def synchronize_datasets_as_set(self):
@@ -1073,7 +1060,7 @@ class SyncGUI(QMainWindow):
         offset_timescale_extra = timescale_extra[art_start_index_extra:] - art_start_0_extra
         self.dataset_extra.reset_timescale = offset_timescale_extra
         self.dataset_extra.reset_data = offset_data_extra
-        self.ax_synced.scatter(offset_timescale_extra, offset_data_extra, s=8, color='pink', label='External')
+        self.ax_synced.scatter(offset_timescale_extra, offset_data_extra, s=8, color='#90EE90', label='External')
 
         # Plot the intracranial channel synchronized
         data_intra = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index]
@@ -1085,9 +1072,12 @@ class SyncGUI(QMainWindow):
         offset_timescale_intra = timescale_intra[art_start_index_intra:] - art_start_0_intra
         self.dataset_intra.reset_timescale = offset_timescale_intra
         self.dataset_intra.reset_data = offset_data_intra
-        self.ax_synced.scatter(offset_timescale_intra, offset_data_intra, s=8, color='purple', label='Intracranial')
+        self.ax_synced.scatter(offset_timescale_intra, offset_data_intra, s=8, color='#6495ED', label='Intracranial')
         self.ax_synced.legend(loc='upper left')
         self.canvas_synced.draw()
+        self.btn_select_last_art_mat.setEnabled(True)
+        self.btn_select_last_art_xdf.setEnabled(True)
+
 
 
     def select_last_artifact_mat(self):
@@ -1125,9 +1115,11 @@ class SyncGUI(QMainWindow):
 
                     self.dataset_intra.last_artifact = closest_value_x_intra
                     self.label_select_last_art_mat.setText(f"Selected last artifact start: {self.dataset_intra.last_artifact} s")
+                    self.update_timeshift_button_state()
 
         # Connect and store the ID of the intracranial event listener
         self.cid_intra = self.canvas_synced.mpl_connect("button_press_event", onclick)
+        
 
 
     def select_last_artifact_ext(self):
@@ -1165,14 +1157,40 @@ class SyncGUI(QMainWindow):
 
                     self.dataset_extra.last_artifact = closest_value_x_extra
                     self.label_select_last_art_xdf.setText(f"Selected last artifact start: {self.dataset_extra.last_artifact} s")
-
+                    self.update_timeshift_button_state()
         # Connect and store the ID of the external event listener
         self.cid_extra = self.canvas_synced.mpl_connect("button_press_event", onclick)
+        
 
 
     def compute_timeshift(self):
         timeshift = (self.dataset_extra.last_artifact - self.dataset_intra.last_artifact)*1000
         self.label_timeshift.setText(f"Timeshift: {timeshift} ms")
+
+
+
+    def update_synchronize_button_state(self):
+        """Enable or disable the synchronize button based on file selection."""
+        if self.dataset_intra.art_start is not None and self.dataset_extra.art_start is not None:
+            self.btn_sync_as_set.setEnabled(True)
+            self.btn_sync_as_pickle.setEnabled(True)
+            self.btn_all_as_pickle.setEnabled(True)
+            self.switch_to_second_page_button.setEnabled(True)
+            self.switch_to_second_page_button.setEnabled(True)
+        else:
+            self.btn_sync_as_set.setEnabled(False)
+            self.btn_sync_as_pickle.setEnabled(False)
+            self.btn_all_as_pickle.setEnabled(False)
+            self.switch_to_second_page_button.setEnabled(False)
+            self.switch_to_second_page_button.setEnabled(False)
+
+
+    def update_timeshift_button_state(self):
+        """Enable or disable the timeshift button based on artifact selection."""
+        if self.dataset_intra.last_artifact is not None and self.dataset_extra.last_artifact is not None:
+            self.btn_compute_timeshift.setEnabled(True)
+        else:
+            self.btn_compute_timeshift.setEnabled(False)
 
 
     def detrend_data(self, channel_data):

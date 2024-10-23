@@ -10,7 +10,7 @@ import sys
 import matplotlib
 matplotlib.use('Qt5Agg')
 import PyQt5
-from PyQt5.QtWidgets import QLabel, QApplication, QMainWindow, QListWidget, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QInputDialog, QMessageBox
+from PyQt5.QtWidgets import QLabel, QApplication, QMainWindow, QListWidget, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QInputDialog, QMessageBox, QStackedWidget
 from PyQt5.QtCore import QTimer
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
@@ -48,6 +48,9 @@ class DataSet:
         self.sf = None  
         self.art_start= None 
         self.times = None
+        self.last_artifact = None
+        self.reset_timescale = None
+        self.reset_data = None
 
 
 
@@ -85,7 +88,33 @@ class SyncGUI(QMainWindow):
         self.setWindowTitle("ReSync GUI")
         self.setGeometry(100, 100, 1000, 600)
 
+        # Create a stacked widget to hold multiple pages
+        self.stacked_widget = QStackedWidget()
+
+        # First page with your current layout
+        self.first_page = self.create_first_page()
+        self.stacked_widget.addWidget(self.first_page)
+
+        # Second page with a different layout
+        self.second_page = self.create_second_page()
+        self.stacked_widget.addWidget(self.second_page)
+
         # Main vertical layout
+        main_layout = QVBoxLayout()
+        main_layout.addWidget(self.stacked_widget)        
+
+        # Central widget setup
+        container = QWidget()
+        container.setLayout(main_layout)
+        self.setCentralWidget(container)
+
+        # Initialize datasets objects
+        self.dataset_intra = DataSet()  # Dataset for the intracranial recording (STN recordings from Percept). Should be .mat file
+        self.dataset_extra = DataSet()  # Dataset for the extracranial recording (EEG for example) Should be .xdf file
+
+
+    def create_first_page(self):
+        # Main vertical layout for the first page
         main_layout = QVBoxLayout()
 
         # Horizontal layout for .mat and .xdf panels
@@ -111,25 +140,23 @@ class SyncGUI(QMainWindow):
         # Add the horizontal panel layout to the main layout
         main_layout.addLayout(panel_layout)
 
-        # Create and add the Synchronize and saving buttons
+        # Synchronize and save buttons
         self.label_sync_and_save = QLabel('Synchronize and save as:')
         self.label_sync_and_save.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
         main_layout.addWidget(self.label_sync_and_save)
+
         saving_layout = QHBoxLayout()
 
-        # Save both files as .set files    
         self.btn_sync_as_set = Button("separately as .SET files", "lightyellow")
         self.btn_sync_as_set.setEnabled(False)
-        self.btn_sync_as_set.clicked.connect(self.synchronize_datasets_as_set) 
+        self.btn_sync_as_set.clicked.connect(self.synchronize_datasets_as_set)
         saving_layout.addWidget(self.btn_sync_as_set)
 
-        # Save both as .pickle files
         self.btn_sync_as_pickle = Button("separately as .pkl files", "lightyellow")
         self.btn_sync_as_pickle.setEnabled(False)
-        self.btn_sync_as_pickle.clicked.connect(self.synchronize_datasets_as_pickles) 
+        self.btn_sync_as_pickle.clicked.connect(self.synchronize_datasets_as_pickles)
         saving_layout.addWidget(self.btn_sync_as_pickle)
 
-        # Save everything together in one pickle file
         self.btn_all_as_pickle = Button("all as one .pkl", "lightyellow")
         self.btn_all_as_pickle.setEnabled(False)
         self.btn_all_as_pickle.clicked.connect(self.synchronize_datasets_as_one_pickle)
@@ -137,15 +164,85 @@ class SyncGUI(QMainWindow):
 
         main_layout.addLayout(saving_layout)
 
-        # Central widget setup
-        container = QWidget()
-        container.setLayout(main_layout)
-        self.setCentralWidget(container)
+        # Add button to switch to the second page
+        self.switch_to_second_page_button = Button("Go to timeshift analysis","#FFDAB9")
+        self.switch_to_second_page_button.clicked.connect(self.show_second_page)
+        self.switch_to_second_page_button.setEnabled(False)
+        main_layout.addWidget(self.switch_to_second_page_button)
 
-        # Initialize datasets objects
-        self.dataset_intra = DataSet()  # Dataset for the intracranial recording (STN recordings from Percept). Should be .mat file
-        self.dataset_extra = DataSet()  # Dataset for the extracranial recording (EEG for example) Should be .xdf file
+        # Create the first page widget and set the layout
+        first_page_widget = QWidget()
+        first_page_widget.setLayout(main_layout)
+        return first_page_widget
 
+    def create_second_page(self):
+        # Second page layout
+        layout_second_page = QVBoxLayout()
+
+        self.btn_plot_synced_channels = Button("Plot synchronized channels", "lightyellow")
+        self.btn_plot_synced_channels.clicked.connect(self.plot_synced_channels)
+        layout_second_page.addWidget(self.btn_plot_synced_channels)
+
+        # Set up canvas for matplotlib for .mat
+        self.figure_synced, self.ax_synced = plt.subplots()
+        self.canvas_synced = FigureCanvas(self.figure_synced)
+        self.canvas_synced.setEnabled(False)  # Initially hidden
+
+        # Set up the interactive toolbar to plot the synchronized signals together and check for timeshift
+        self.toolbar_synced = NavigationToolbar(self.canvas_synced, self)
+        self.toolbar_synced.setEnabled(False)
+        layout_second_page.addWidget(self.toolbar_synced)
+        layout_second_page.addWidget(self.canvas_synced)
+
+        layout_second_page_selection = QHBoxLayout()
+        layout_second_page_selection_mat = QVBoxLayout()
+        layout_second_page_selection_xdf = QVBoxLayout()
+
+        self.btn_select_last_art_mat = Button("Select last artifact in intracranial recording", "lightblue")
+        self.btn_select_last_art_mat.clicked.connect(self.select_last_artifact_mat)
+        layout_second_page_selection_mat.addWidget(self.btn_select_last_art_mat)
+
+        self.label_select_last_art_mat = QLabel("No artifact selected")
+        self.label_select_last_art_mat.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
+        layout_second_page_selection_mat.addWidget(self.label_select_last_art_mat)
+
+
+        self.btn_select_last_art_xdf = Button("Select last artifact in extracranial recording", "lightgreen")
+        self.btn_select_last_art_xdf.clicked.connect(self.select_last_artifact_ext)
+        layout_second_page_selection_xdf.addWidget(self.btn_select_last_art_xdf)
+
+        self.label_select_last_art_xdf = QLabel("No artifact selected")
+        self.label_select_last_art_xdf.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
+        layout_second_page_selection_xdf.addWidget(self.label_select_last_art_xdf)
+
+        layout_second_page_selection.addLayout(layout_second_page_selection_mat)
+        layout_second_page_selection.addLayout(layout_second_page_selection_xdf)
+        layout_second_page.addLayout(layout_second_page_selection)
+
+        layout_timeshift = QHBoxLayout()
+        self.btn_compute_timeshift = Button("Compute timeshift", "lightyellow")
+        self.btn_compute_timeshift.clicked.connect(self.compute_timeshift)
+        layout_timeshift.addWidget(self.btn_compute_timeshift)
+
+        self.label_timeshift = QLabel("No timeshift computed")
+        layout_timeshift.addWidget(self.label_timeshift)
+        layout_second_page.addLayout(layout_timeshift)
+
+        # Button to go back to the first page
+        self.back_button = Button("Back to main window","#FFDAB9")
+        self.back_button.clicked.connect(self.show_first_page)
+        layout_second_page.addWidget(self.back_button)
+
+        # Create the second page widget
+        second_page_widget = QWidget()
+        second_page_widget.setLayout(layout_second_page)
+        return second_page_widget
+
+    def show_first_page(self):
+        self.stacked_widget.setCurrentIndex(0)
+
+    def show_second_page(self):
+        self.stacked_widget.setCurrentIndex(1)
 
     def create_mat_panel(self):
         """Create the left panel for .mat file processing."""
@@ -628,7 +725,7 @@ class SyncGUI(QMainWindow):
                     closest_index_x = np.argmin(np.abs(timescale - event.xdata))
                     closest_value_x = timescale[closest_index_x]
                     closest_value_y = data[closest_index_x]
-                    plus_symbol.set_data(closest_value_x, closest_value_y)
+                    plus_symbol.set_data([closest_value_x], [closest_value_y])
                     self.canvas_xdf.draw()
                     self.dataset_extra.art_start = closest_value_x
                     self.label_manual_artifact_time_xdf.setText(f"Selected Artifact start: {closest_value_x} s")
@@ -644,10 +741,14 @@ class SyncGUI(QMainWindow):
             self.btn_sync_as_set.setEnabled(True)
             self.btn_sync_as_pickle.setEnabled(True)
             self.btn_all_as_pickle.setEnabled(True)
+            self.switch_to_second_page_button.setEnabled(True)
+            self.switch_to_second_page_button.setEnabled(True)
         else:
             self.btn_sync_as_set.setEnabled(False)
             self.btn_sync_as_pickle.setEnabled(False)
             self.btn_all_as_pickle.setEnabled(False)
+            self.switch_to_second_page_button.setEnabled(False)
+            self.switch_to_second_page_button.setEnabled(False)
 
 
 
@@ -954,6 +1055,124 @@ class SyncGUI(QMainWindow):
         final_df.to_pickle(filepath)
         print(f"DataFrame {filename} saved as pickle to {filepath}")
         QMessageBox.information(self, "Synchronization", "Synchronization done. Everything saved as one .pickle file")
+
+
+    def plot_synced_channels(self):
+        self.toolbar_synced.setEnabled(True)
+        self.canvas_synced.setEnabled(True)
+        self.ax_synced.clear()
+
+        # Plot the external channel synchronized
+        data_extra = self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index]
+        data_extra_detrended = self.detrend_data(data_extra)
+        timescale_extra = self.dataset_extra.times
+        art_start_0_extra = self.dataset_extra.art_start - 1
+        # Find the index in self.dataset_extra.times corresponding to art_start_0
+        art_start_index_extra = (timescale_extra >= art_start_0_extra).argmax()
+        offset_data_extra = data_extra_detrended[art_start_index_extra:]
+        offset_timescale_extra = timescale_extra[art_start_index_extra:] - art_start_0_extra
+        self.dataset_extra.reset_timescale = offset_timescale_extra
+        self.dataset_extra.reset_data = offset_data_extra
+        self.ax_synced.scatter(offset_timescale_extra, offset_data_extra, s=8, color='pink', label='External')
+
+        # Plot the intracranial channel synchronized
+        data_intra = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index]
+        timescale_intra = self.dataset_intra.times
+        art_start_0_intra = self.dataset_intra.art_start - 1
+        # Find the index in self.dataset_intra.times corresponding to art_start_0
+        art_start_index_intra = (timescale_intra >= art_start_0_intra).argmax()
+        offset_data_intra = data_intra[art_start_index_intra:]
+        offset_timescale_intra = timescale_intra[art_start_index_intra:] - art_start_0_intra
+        self.dataset_intra.reset_timescale = offset_timescale_intra
+        self.dataset_intra.reset_data = offset_data_intra
+        self.ax_synced.scatter(offset_timescale_intra, offset_data_intra, s=8, color='purple', label='Intracranial')
+        self.ax_synced.legend(loc='upper left')
+        self.canvas_synced.draw()
+
+
+    def select_last_artifact_mat(self):
+        # Check if we're already in external selection mode and prevent interference
+        if hasattr(self, 'cid_extra') and self.cid_extra is not None:
+            self.canvas_synced.mpl_disconnect(self.cid_extra)
+            self.cid_extra = None
+
+        pos_intra = []
+
+        self.ax_synced.set_title(
+            'Right click on the plot to select the start of the last artifact in the intracranial recording (shown by the black "+")'
+        )
+        self.canvas_synced.draw()
+
+        # Create or update the intracranial "+" symbol
+        if not hasattr(self, 'plus_symbol_intra'):
+            self.plus_symbol_intra, = self.ax_synced.plot([], [], "k+", markersize=10)
+
+        # Disconnect previous intracranial event listener, if any
+        if hasattr(self, 'cid_intra') and self.cid_intra is not None:
+            self.canvas_synced.mpl_disconnect(self.cid_intra)
+
+        # Define the click handler for the intracranial selection
+        def onclick(event_intra):
+            if event_intra.inaxes is not None:  # Check if the click is inside the axes
+                if event_intra.button == MouseButton.RIGHT:
+                    pos_intra.append([event_intra.xdata, event_intra.ydata])
+
+                    closest_index_x_intra = np.argmin(np.abs(self.dataset_intra.reset_timescale - event_intra.xdata))
+                    closest_value_x_intra = self.dataset_intra.reset_timescale[closest_index_x_intra]
+                    closest_value_y_intra = self.dataset_intra.reset_data[closest_index_x_intra]
+                    self.plus_symbol_intra.set_data([closest_value_x_intra], [closest_value_y_intra])
+                    self.canvas_synced.draw()
+
+                    self.dataset_intra.last_artifact = closest_value_x_intra
+                    self.label_select_last_art_mat.setText(f"Selected last artifact start: {self.dataset_intra.last_artifact} s")
+
+        # Connect and store the ID of the intracranial event listener
+        self.cid_intra = self.canvas_synced.mpl_connect("button_press_event", onclick)
+
+
+    def select_last_artifact_ext(self):
+        # Check if we're already in intracranial selection mode and prevent interference
+        if hasattr(self, 'cid_intra') and self.cid_intra is not None:
+            self.canvas_synced.mpl_disconnect(self.cid_intra)
+            self.cid_intra = None
+
+        pos_extra = []
+
+        self.ax_synced.set_title(
+            'Right click on the plot to select the start of the last artifact in the external recording (shown by the red "+")'
+        )
+        self.canvas_synced.draw()
+
+        # Create or update the external "+" symbol
+        if not hasattr(self, 'plus_symbol_extra'):
+            self.plus_symbol_extra, = self.ax_synced.plot([], [], "r+", markersize=10)
+
+        # Disconnect previous external event listener, if any
+        if hasattr(self, 'cid_extra') and self.cid_extra is not None:
+            self.canvas_synced.mpl_disconnect(self.cid_extra)
+
+        # Define the click handler for the external selection
+        def onclick(event_extra):
+            if event_extra.inaxes is not None:  # Check if the click is inside the axes
+                if event_extra.button == MouseButton.RIGHT:
+                    pos_extra.append([event_extra.xdata, event_extra.ydata])
+
+                    closest_index_x_extra = np.argmin(np.abs(self.dataset_extra.reset_timescale - event_extra.xdata))
+                    closest_value_x_extra = self.dataset_extra.reset_timescale[closest_index_x_extra]
+                    closest_value_y_extra = self.dataset_extra.reset_data[closest_index_x_extra]
+                    self.plus_symbol_extra.set_data([closest_value_x_extra], [closest_value_y_extra])
+                    self.canvas_synced.draw()
+
+                    self.dataset_extra.last_artifact = closest_value_x_extra
+                    self.label_select_last_art_xdf.setText(f"Selected last artifact start: {self.dataset_extra.last_artifact} s")
+
+        # Connect and store the ID of the external event listener
+        self.cid_extra = self.canvas_synced.mpl_connect("button_press_event", onclick)
+
+
+    def compute_timeshift(self):
+        timeshift = (self.dataset_extra.last_artifact - self.dataset_intra.last_artifact)*1000
+        self.label_timeshift.setText(f"Timeshift: {timeshift} ms")
 
 
     def detrend_data(self, channel_data):

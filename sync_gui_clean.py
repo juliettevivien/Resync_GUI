@@ -582,7 +582,8 @@ class SyncGUI(QMainWindow):
                 stream_id = self.find_EEG_stream(file_name, stream_name='SAGA')
                 raw_data = read_raw(file_name, stream_ids=[stream_id], preload=True)
                 self.dataset_extra.raw_data = raw_data
-                self.dataset_extra.sf = round(raw_data.info["sfreq"])  # Get the sampling frequency
+                #self.dataset_extra.sf = round(raw_data.info["sfreq"])  # Get the sampling frequency ## ERROR !!!! should not be rounded
+                self.dataset_extra.sf = raw_data.info["sfreq"]  # Get the sampling frequency
                 self.dataset_extra.ch_names = raw_data.ch_names  # Get the channel names
                 self.dataset_extra.times = raw_data.times # Get the timescale
                 #QMessageBox.information(self, "Success", f"XDF file loaded successfully: {file_name}")
@@ -759,7 +760,7 @@ class SyncGUI(QMainWindow):
         events_lfp = deepcopy(events)
 
         # get the events from the external in time instead of samples to account for the different sampling frequencies
-        events_in_time = events[:,0]/self.dataset_extra.sf #### CAREFUL HERE THE SAMPLING FREQUENCY MIGHT BE WRONG ####
+        events_in_time = events[:,0]/self.dataset_extra.sf
 
         # then offset the events in time to the new start of the external recording
         events_in_time_offset = events_in_time - new_start_external

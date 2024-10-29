@@ -103,6 +103,11 @@ class SyncGUI(QMainWindow):
         main_layout = QVBoxLayout()
         main_layout.addWidget(self.stacked_widget)        
 
+        # Add reset button
+        self.reset_button = QPushButton("Reset", self)
+        self.reset_button.clicked.connect(self.reset_app)
+        main_layout.addWidget(self.reset_button)
+
         # Central widget setup
         container = QWidget()
         container.setLayout(main_layout)
@@ -112,6 +117,13 @@ class SyncGUI(QMainWindow):
         self.dataset_intra = DataSet()  # Dataset for the intracranial recording (STN recordings from Percept). Should be .mat file
         self.dataset_extra = DataSet()  # Dataset for the extracranial recording (EEG for example) Should be .xdf file
 
+    def reset_app(self):
+        # Close current instance of the window
+        self.close()
+        
+        # Open a new instance of SyncGUI
+        self.new_window = SyncGUI()  # Create a new window instance
+        self.new_window.show()  # Show the new window
 
     def create_first_page(self):
         # Main vertical layout for the first page
@@ -472,12 +484,13 @@ class SyncGUI(QMainWindow):
                     closest_value_x = timescale[closest_index_x]
                     closest_value_y = data[closest_index_x]
                     plus_symbol.set_data([closest_value_x], [closest_value_y])
-                    self.canvas_xdf.draw()
+                    self.canvas_mat.draw()
                     self.dataset_intra.art_start = closest_value_x
                     self.label_manual_artifact_time_mat.setText(f"Selected Artifact start: {closest_value_x} s")
                     self.update_synchronize_button_state()
 
         self.canvas_mat.mpl_connect("button_press_event", onclick)
+        ## WEIRD ERROR !! the black cross doesn't show
         
     
 
@@ -582,11 +595,9 @@ class SyncGUI(QMainWindow):
                 stream_id = self.find_EEG_stream(file_name, stream_name='SAGA')
                 raw_data = read_raw(file_name, stream_ids=[stream_id], preload=True)
                 self.dataset_extra.raw_data = raw_data
-                #self.dataset_extra.sf = round(raw_data.info["sfreq"])  # Get the sampling frequency ## ERROR !!!! should not be rounded
                 self.dataset_extra.sf = raw_data.info["sfreq"]  # Get the sampling frequency
                 self.dataset_extra.ch_names = raw_data.ch_names  # Get the channel names
                 self.dataset_extra.times = raw_data.times # Get the timescale
-                #QMessageBox.information(self, "Success", f"XDF file loaded successfully: {file_name}")
 
                 # Show channel selection and plot buttons for .xdf
                 self.channel_label_xdf.setEnabled(True)
@@ -709,11 +720,12 @@ class SyncGUI(QMainWindow):
         self.canvas_xdf.setEnabled(True)
         self.ax_xdf.clear()
         data = self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index]
+        channel_data_to_plot = self.detrend_data(data)
         timescale = self.dataset_extra.times
 
         pos = []
 
-        self.ax_xdf.scatter(timescale, data, s=8)
+        self.ax_xdf.scatter(timescale, channel_data_to_plot, s=8)
         self.canvas_xdf.draw()
         self.ax_xdf.set_title(
             'Right click on the plot to select the start of the artifact (shown by the black "+")'
@@ -728,21 +740,29 @@ class SyncGUI(QMainWindow):
 
                     # Update the position of the black "+" symbol
                     closest_index_x = np.argmin(np.abs(timescale - event.xdata))
+                    print(closest_index_x)
                     closest_value_x = timescale[closest_index_x]
-                    closest_value_y = data[closest_index_x]
+                    print(closest_value_x)
+                    closest_value_y = channel_data_to_plot[closest_index_x]
+                    print(closest_value_y)
                     plus_symbol.set_data([closest_value_x], [closest_value_y])
                     self.canvas_xdf.draw()
                     self.dataset_extra.art_start = closest_value_x
                     self.label_manual_artifact_time_xdf.setText(f"Selected Artifact start: {closest_value_x} s")
+                    self.update_synchronize_button_state()
 
         self.canvas_xdf.mpl_connect("button_press_event", onclick)
-        self.update_synchronize_button_state()
+        
     
 
 
     def synchronize_datasets_as_set(self):
+        print("events from annotations extraction")
         events, _ = mne.events_from_annotations(self.dataset_extra.raw_data)
-        inv_dic = {v: k for k, v in _.items()}
+        inv_dic = {v: str(k) for k, v in _.items()}
+        print("event from annotations done")
+        print(f"events: {events}")
+        print(f"inv_dic: {inv_dic}")
 
         ## offset intracranial recording (crop everything that is more than 1s before the artifact)
         tmax_lfp = max(self.dataset_intra.times)
@@ -753,7 +773,6 @@ class SyncGUI(QMainWindow):
         tmax_external = max(self.dataset_extra.times)
         new_start_external = self.dataset_extra.art_start - 1
         TMSi_rec_offset = self.dataset_extra.raw_data.copy().crop(tmin=new_start_external, tmax=tmax_external)
-        #TMSi_rec_offset.plot(title='TMSi_rec_offset')
 
         ## transfer of the events from the external to the intracranial recording
         # create a duplicate of the events to manipulate it without changing the external one
@@ -761,6 +780,7 @@ class SyncGUI(QMainWindow):
 
         # get the events from the external in time instead of samples to account for the different sampling frequencies
         events_in_time = events[:,0]/self.dataset_extra.sf
+        print("events converted in times")
 
         # then offset the events in time to the new start of the external recording
         events_in_time_offset = events_in_time - new_start_external
@@ -770,11 +790,19 @@ class SyncGUI(QMainWindow):
         events_in_time_offset_lfp = events_in_time_offset * self.dataset_intra.sf
         events_lfp[:,0] = events_in_time_offset_lfp
 
+        # Recast event descriptions to standard Python strings
+        #events_lfp[:, 2] = events_lfp[:, 2].astype(str)
+
         ## create an annotation object for the intracranial recording
+        print("annotations from events starting")
         annotations_lfp = mne.annotations_from_events(events_lfp, sfreq=self.dataset_intra.sf, event_desc=inv_dic)
+        print("annotations from events done")
+        print(annotations_lfp)
 
         lfp_rec_offset.set_annotations(None) # make sure that no annotations are present
+        print("annotations removed")
         lfp_rec_offset.set_annotations(annotations_lfp) # set the new annotations
+        print("new annotations added")
 
         external_title = ("SYNCHRONIZED_EXTERNAL_" + str(self.dataset_extra.file_name[:-4]) + ".set")
         lfp_title = ("SYNCHRONIZED_INTRACRANIAL_" + str(self.dataset_intra.file_name[:-4]) + ".set")

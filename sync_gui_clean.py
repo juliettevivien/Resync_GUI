@@ -1,17 +1,9 @@
-"""
-TO DO: 
-    - re-assess external sampling frequency, is not 2048Hz exactly !!!
-    - Modify  synchronize_datasets_as_pickles function to work properly !!! 
-    Use the other button for now instead: all as one .pickle
-"""
-
-
 import sys
 import matplotlib
 matplotlib.use('Qt5Agg')
 import PyQt5
 from PyQt5.QtWidgets import QLabel, QApplication, QMainWindow, QListWidget, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QInputDialog, QMessageBox, QStackedWidget
-from PyQt5.QtCore import QTimer
+#from PyQt5.QtCore import QTimer
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.backend_bases import MouseButton
@@ -359,9 +351,6 @@ class SyncGUI(QMainWindow):
                 self.file_label_mat.setText(f"Selected File: {basename(file_name)}")
                 self.dataset_intra.file_name = basename(file_name)
                 self.dataset_intra.file_path = dirname(file_name)
-                
-                # Show success message
-                #QMessageBox.information(self, "Success", f"MAT file loaded successfully: {file_name}")
 
                 # Show channel selection and plot buttons for .mat
                 self.btn_select_channel_mat.setEnabled(True)
@@ -490,7 +479,6 @@ class SyncGUI(QMainWindow):
                     self.update_synchronize_button_state()
 
         self.canvas_mat.mpl_connect("button_press_event", onclick)
-        ## WEIRD ERROR !! the black cross doesn't show
         
     
 
@@ -740,11 +728,8 @@ class SyncGUI(QMainWindow):
 
                     # Update the position of the black "+" symbol
                     closest_index_x = np.argmin(np.abs(timescale - event.xdata))
-                    print(closest_index_x)
                     closest_value_x = timescale[closest_index_x]
-                    print(closest_value_x)
                     closest_value_y = channel_data_to_plot[closest_index_x]
-                    print(closest_value_y)
                     plus_symbol.set_data([closest_value_x], [closest_value_y])
                     self.canvas_xdf.draw()
                     self.dataset_extra.art_start = closest_value_x

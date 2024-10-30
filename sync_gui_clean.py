@@ -14,6 +14,7 @@ from mnelab.io.readers import read_raw
 from os.path import join, basename, dirname
 from pyxdf import resolve_streams
 import scipy
+from scipy.io import savemat
 import numpy as np
 import pandas as pd
 from copy import deepcopy
@@ -21,6 +22,7 @@ import pickle
 
 # import modules
 from pyxdftools.xdfdata import XdfData
+from functions.tmsi_poly5reader import Poly5Reader
 
 from functions.io import write_set
 from functions.find_artifacts import (
@@ -43,6 +45,7 @@ class DataSet:
         self.last_artifact = None
         self.reset_timescale = None
         self.reset_data = None
+        self.max_y_value = None
 
 
 
@@ -107,7 +110,7 @@ class SyncGUI(QMainWindow):
 
         # Initialize datasets objects
         self.dataset_intra = DataSet()  # Dataset for the intracranial recording (STN recordings from Percept). Should be .mat file
-        self.dataset_extra = DataSet()  # Dataset for the extracranial recording (EEG for example) Should be .xdf file
+        self.dataset_extra = DataSet()  # Dataset for the extracranial recording (EEG for example) Should be .xdf or .Poly5 file
 
     def reset_app(self):
         # Close current instance of the window
@@ -121,7 +124,7 @@ class SyncGUI(QMainWindow):
         # Main vertical layout for the first page
         main_layout = QVBoxLayout()
 
-        # Horizontal layout for .mat and .xdf panels
+        # Horizontal layout for intracranial and external recordings panels
         panel_layout = QHBoxLayout()
 
         # Create a button to select the folder where to save the results
@@ -133,9 +136,9 @@ class SyncGUI(QMainWindow):
         self.label_saving_folder.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
         main_layout.addWidget(self.label_saving_folder)
 
-        # Left panel for .mat file
-        self.mat_panel = self.create_mat_panel()
-        panel_layout.addLayout(self.mat_panel)
+        # Left panel for intracranial file
+        self.panel_intra = self.create_panel_intra()
+        panel_layout.addLayout(self.panel_intra)
 
         # Right panel for .xdf file
         self.xdf_panel = self.create_xdf_panel()
@@ -149,24 +152,46 @@ class SyncGUI(QMainWindow):
         self.label_sync_and_save.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
         main_layout.addWidget(self.label_sync_and_save)
 
-        saving_layout = QHBoxLayout()
+        # layout for saving from .xdf files
+        saving_xdf_layout = QHBoxLayout()
+
+        self.label_saving_xdf = QLabel("If the external file was .xdf:")
+        saving_xdf_layout.addWidget(self.label_saving_xdf)
 
         self.btn_sync_as_set = Button("separately as .SET files", "lightyellow")
         self.btn_sync_as_set.setEnabled(False)
         self.btn_sync_as_set.clicked.connect(self.synchronize_datasets_as_set)
-        saving_layout.addWidget(self.btn_sync_as_set)
+        saving_xdf_layout.addWidget(self.btn_sync_as_set)
 
         self.btn_sync_as_pickle = Button("separately as .pkl files", "lightyellow")
         self.btn_sync_as_pickle.setEnabled(False)
         self.btn_sync_as_pickle.clicked.connect(self.synchronize_datasets_as_pickles)
-        saving_layout.addWidget(self.btn_sync_as_pickle)
+        saving_xdf_layout.addWidget(self.btn_sync_as_pickle)
 
         self.btn_all_as_pickle = Button("all as one .pkl", "lightyellow")
         self.btn_all_as_pickle.setEnabled(False)
         self.btn_all_as_pickle.clicked.connect(self.synchronize_datasets_as_one_pickle)
-        saving_layout.addWidget(self.btn_all_as_pickle)
+        saving_xdf_layout.addWidget(self.btn_all_as_pickle)
 
-        main_layout.addLayout(saving_layout)
+        main_layout.addLayout(saving_xdf_layout)
+
+        # layout for saving from .Poly5 files
+        saving_poly5_layout = QHBoxLayout()
+
+        self.label_saving_poly5 = QLabel("If the external file was .Poly5:")
+        saving_poly5_layout.addWidget(self.label_saving_poly5)
+
+        self.btn_sync_as_mat = Button("separately as .mat files", "lightyellow")
+        self.btn_sync_as_mat.setEnabled(False)
+        self.btn_sync_as_mat.clicked.connect(self.synchronize_datasets_as_mat)
+        saving_poly5_layout.addWidget(self.btn_sync_as_mat)
+
+        self.btn_sync_as_pickle_from_poly5 = Button("separately as .pkl files", "lightyellow")
+        self.btn_sync_as_pickle_from_poly5.setEnabled(False)
+        #self.btn_sync_as_pickle_from_poly5.clicked.connect(self.synchronize_datasets_as_pickles_from_poly5)
+        saving_poly5_layout.addWidget(self.btn_sync_as_pickle_from_poly5)
+
+        main_layout.addLayout(saving_poly5_layout)        
 
         # Add button to switch to the second page
         self.switch_to_second_page_button = Button("Go to timeshift analysis","#FFDAB9")
@@ -187,7 +212,7 @@ class SyncGUI(QMainWindow):
         self.btn_plot_synced_channels.clicked.connect(self.plot_synced_channels)
         layout_second_page.addWidget(self.btn_plot_synced_channels)
 
-        # Set up canvas for matplotlib for .mat
+        # Set up canvas for matplotlib for synced datasets
         self.figure_synced, self.ax_synced = plt.subplots()
         self.canvas_synced = FigureCanvas(self.figure_synced)
         self.canvas_synced.setEnabled(False)  # Initially hidden
@@ -199,17 +224,17 @@ class SyncGUI(QMainWindow):
         layout_second_page.addWidget(self.canvas_synced)
 
         layout_second_page_selection = QHBoxLayout()
-        layout_second_page_selection_mat = QVBoxLayout()
+        layout_second_page_selection_intra = QVBoxLayout()
         layout_second_page_selection_xdf = QVBoxLayout()
 
-        self.btn_select_last_art_mat = Button("Select last artifact in intracranial recording", "lightblue")
-        self.btn_select_last_art_mat.clicked.connect(self.select_last_artifact_mat)
-        self.btn_select_last_art_mat.setEnabled(False)
-        layout_second_page_selection_mat.addWidget(self.btn_select_last_art_mat)
+        self.btn_select_last_art_intra = Button("Select last artifact in intracranial recording", "lightblue")
+        self.btn_select_last_art_intra.clicked.connect(self.select_last_artifact_intra)
+        self.btn_select_last_art_intra.setEnabled(False)
+        layout_second_page_selection_intra.addWidget(self.btn_select_last_art_intra)
 
-        self.label_select_last_art_mat = QLabel("No artifact selected")
-        self.label_select_last_art_mat.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
-        layout_second_page_selection_mat.addWidget(self.label_select_last_art_mat)
+        self.label_select_last_art_intra = QLabel("No artifact selected")
+        self.label_select_last_art_intra.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
+        layout_second_page_selection_intra.addWidget(self.label_select_last_art_intra)
 
 
         self.btn_select_last_art_xdf = Button("Select last artifact in extracranial recording", "lightgreen")
@@ -221,7 +246,7 @@ class SyncGUI(QMainWindow):
         self.label_select_last_art_xdf.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
         layout_second_page_selection_xdf.addWidget(self.label_select_last_art_xdf)
 
-        layout_second_page_selection.addLayout(layout_second_page_selection_mat)
+        layout_second_page_selection.addLayout(layout_second_page_selection_intra)
         layout_second_page_selection.addLayout(layout_second_page_selection_xdf)
         layout_second_page.addLayout(layout_second_page_selection)
 
@@ -251,85 +276,85 @@ class SyncGUI(QMainWindow):
     def show_second_page(self):
         self.stacked_widget.setCurrentIndex(1)
 
-    def create_mat_panel(self):
-        """Create the left panel for .mat file processing."""
+    def create_panel_intra(self):
+        """Create the left panel for intracranial file processing."""
         layout = QVBoxLayout()
 
-        # File selection button for .mat
-        self.btn_load_file_mat = Button("Load .mat File", "lightblue")
-        self.btn_load_file_mat.clicked.connect(self.load_mat_file)
-        layout.addWidget(self.btn_load_file_mat)
+        # File selection button for intracranial
+        self.btn_load_file_intra = Button("Load intracranial file (supported format: .mat)", "lightblue")
+        self.btn_load_file_intra.clicked.connect(self.load_mat_file)
+        layout.addWidget(self.btn_load_file_intra)
 
         # Create a label to display the selected file name
-        self.file_label_mat = QLabel("No file selected")
-        self.file_label_mat.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
-        layout.addWidget(self.file_label_mat)
+        self.file_label_intra = QLabel("No file selected")
+        self.file_label_intra.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
+        layout.addWidget(self.file_label_intra)
 
-        # Set up canvas for matplotlib for .mat
-        self.figure_mat, self.ax_mat = plt.subplots()
-        self.canvas_mat = FigureCanvas(self.figure_mat)
-        self.canvas_mat.setEnabled(False)  # Initially hidden
+        # Set up canvas for matplotlib for intracranial data
+        self.figure_intra, self.ax_intra = plt.subplots()
+        self.canvas_intra = FigureCanvas(self.figure_intra)
+        self.canvas_intra.setEnabled(False)  # Initially hidden
 
 
         # Create a navigation toolbar and add it to the layout
-        self.toolbar_mat = NavigationToolbar(self.canvas_mat, self)
-        self.toolbar_mat.setEnabled(False) 
-        layout.addWidget(self.toolbar_mat)  # Add the toolbar to the layout
-        layout.addWidget(self.canvas_mat)    # Add the canvas to the layout
+        self.toolbar_intra = NavigationToolbar(self.canvas_intra, self)
+        self.toolbar_intra.setEnabled(False) 
+        layout.addWidget(self.toolbar_intra)  # Add the toolbar to the layout
+        layout.addWidget(self.canvas_intra)    # Add the canvas to the layout
 
-        # Button layout for .mat channel selection and plotting
-        self.channel_layout_mat = QVBoxLayout()
-        self.channel_selection_layout_mat = QHBoxLayout()
+        # Button layout for intracranial channel selection and plotting
+        self.channel_layout_intra = QVBoxLayout()
+        self.channel_selection_layout_intra = QHBoxLayout()
 
-        # Channel selection button for .mat (Initially hidden)
-        self.btn_select_channel_mat = Button("Select Channel", "lightblue")
-        self.btn_select_channel_mat.setEnabled(False)  # Initially inactive
-        self.btn_select_channel_mat.clicked.connect(self.prompt_channel_name_mat)
-        self.channel_selection_layout_mat.addWidget(self.btn_select_channel_mat)
+        # Channel selection button for intracranial file (Initially hidden)
+        self.btn_select_channel_intra = Button("Select Channel", "lightblue")
+        self.btn_select_channel_intra.setEnabled(False)  # Initially inactive
+        self.btn_select_channel_intra.clicked.connect(self.prompt_channel_name_intra)
+        self.channel_selection_layout_intra.addWidget(self.btn_select_channel_intra)
 
         # Create a label to display the selected channel name
-        self.channel_label_mat = QLabel("No channel selected")
-        self.channel_label_mat.setEnabled(False) # Initially inactive
-        self.channel_selection_layout_mat.addWidget(self.channel_label_mat)  
-        self.channel_layout_mat.addLayout(self.channel_selection_layout_mat)      
+        self.channel_label_intra = QLabel("No channel selected")
+        self.channel_label_intra.setEnabled(False) # Initially inactive
+        self.channel_selection_layout_intra.addWidget(self.channel_label_intra)  
+        self.channel_layout_intra.addLayout(self.channel_selection_layout_intra)      
 
-        # Plot channel button for .mat (Initially hidden)
-        self.btn_plot_channel_mat = Button("Plot Selected Channel", "lightblue")
-        self.btn_plot_channel_mat.setEnabled(False)  # Initially inactive
-        self.btn_plot_channel_mat.clicked.connect(self.plot_channel_mat)
-        self.channel_layout_mat.addWidget(self.btn_plot_channel_mat)
-
-
-        self.artifact_layout_mat = QHBoxLayout()
-        self.automatic_artifact_layout_mat = QVBoxLayout()
-        self.manual_artifact_layout_mat = QVBoxLayout()
+        # Plot channel button for intracranial files (Initially hidden)
+        self.btn_plot_channel_intra = Button("Plot Selected Channel", "lightblue")
+        self.btn_plot_channel_intra.setEnabled(False)  # Initially inactive
+        self.btn_plot_channel_intra.clicked.connect(self.plot_channel_intra)
+        self.channel_layout_intra.addWidget(self.btn_plot_channel_intra)
 
 
-        # Plot artifact detection button for .mat (Initially hidden)
-        self.btn_artifact_detect_mat = Button("Automatic detection synchronization artifact", "lightblue")
-        self.btn_artifact_detect_mat.setEnabled(False)  # Initially hidden
-        self.btn_artifact_detect_mat.clicked.connect(self.detect_artifacts_mat)
-        self.automatic_artifact_layout_mat.addWidget(self.btn_artifact_detect_mat)
-        self.label_automatic_artifact_time_mat = QLabel("No artifact automatically detected")
-        self.label_automatic_artifact_time_mat.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
-        self.label_automatic_artifact_time_mat.setVisible(False)  # Initially hidden
-        self.automatic_artifact_layout_mat.addWidget(self.label_automatic_artifact_time_mat)
+        self.artifact_layout_intra = QHBoxLayout()
+        self.automatic_artifact_layout_intra = QVBoxLayout()
+        self.manual_artifact_layout_intra = QVBoxLayout()
 
-        self.btn_manual_select_artifact_mat = Button("Manual detection synchronization artifact", "lightblue") 
-        self.btn_manual_select_artifact_mat.setEnabled(False)
-        self.btn_manual_select_artifact_mat.clicked.connect(self.manual_selection_mat)
-        self.manual_artifact_layout_mat.addWidget(self.btn_manual_select_artifact_mat)
-        self.label_manual_artifact_time_mat = QLabel("No artifact manually selected")
-        self.label_manual_artifact_time_mat.setVisible(False)
-        self.label_manual_artifact_time_mat.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
-        self.manual_artifact_layout_mat.addWidget(self.label_manual_artifact_time_mat)        
+
+        # Plot artifact detection button for intracranial (Initially hidden)
+        self.btn_artifact_detect_intra = Button("Automatic detection synchronization artifact", "lightblue")
+        self.btn_artifact_detect_intra.setEnabled(False)  # Initially hidden
+        self.btn_artifact_detect_intra.clicked.connect(self.detect_artifacts_intra)
+        self.automatic_artifact_layout_intra.addWidget(self.btn_artifact_detect_intra)
+        self.label_automatic_artifact_time_intra = QLabel("No artifact automatically detected")
+        self.label_automatic_artifact_time_intra.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
+        self.label_automatic_artifact_time_intra.setVisible(False)  # Initially hidden
+        self.automatic_artifact_layout_intra.addWidget(self.label_automatic_artifact_time_intra)
+
+        self.btn_manual_select_artifact_intra = Button("Manual detection synchronization artifact", "lightblue") 
+        self.btn_manual_select_artifact_intra.setEnabled(False)
+        self.btn_manual_select_artifact_intra.clicked.connect(self.manual_selection_intra)
+        self.manual_artifact_layout_intra.addWidget(self.btn_manual_select_artifact_intra)
+        self.label_manual_artifact_time_intra = QLabel("No artifact manually selected")
+        self.label_manual_artifact_time_intra.setVisible(False)
+        self.label_manual_artifact_time_intra.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
+        self.manual_artifact_layout_intra.addWidget(self.label_manual_artifact_time_intra)        
         
-        self.artifact_layout_mat.addLayout(self.automatic_artifact_layout_mat)
-        self.artifact_layout_mat.addLayout(self.manual_artifact_layout_mat)
+        self.artifact_layout_intra.addLayout(self.automatic_artifact_layout_intra)
+        self.artifact_layout_intra.addLayout(self.manual_artifact_layout_intra)
 
-        # Add channel layout to main layout for .mat
-        layout.addLayout(self.channel_layout_mat)
-        layout.addLayout(self.artifact_layout_mat)
+        # Add channel layout to main layout for intracranial
+        layout.addLayout(self.channel_layout_intra)
+        layout.addLayout(self.artifact_layout_intra)
 
 
         return layout
@@ -346,20 +371,22 @@ class SyncGUI(QMainWindow):
                 raw_data = read_raw_fieldtrip(file_name, info={}, data_name="data")
                 self.dataset_intra.raw_data = raw_data  # Assign to dataset
                 self.dataset_intra.sf = raw_data.info["sfreq"]  # Assign sampling frequency
-                self.dataset_intra.ch_names = raw_data.ch_names  # Assign channel names
-                self.dataset_intra.times = raw_data.times # Assign timescale
-                self.file_label_mat.setText(f"Selected File: {basename(file_name)}")
+                #self.dataset_intra.sf = 249.9917165659
+                self.dataset_intra.ch_names = raw_data.ch_names  # Assign channel names#
+                #self.dataset_intra.times = raw_data.times # Assign timescale
+                self.dataset_intra.times = np.linspace(0, raw_data.get_data().shape[1]/self.dataset_intra.sf, raw_data.get_data().shape[1])
+                self.file_label_intra.setText(f"Selected File: {basename(file_name)}")
                 self.dataset_intra.file_name = basename(file_name)
                 self.dataset_intra.file_path = dirname(file_name)
 
-                # Show channel selection and plot buttons for .mat
-                self.btn_select_channel_mat.setEnabled(True)
-                self.channel_label_mat.setEnabled(True)
+                # Show channel selection and plot buttons for intracranial
+                self.btn_select_channel_intra.setEnabled(True)
+                self.channel_label_intra.setEnabled(True)
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load .mat file: {e}")
 
-    def prompt_channel_name_mat(self):
-        """Prompt for channel name selection for .mat file."""
+    def prompt_channel_name_intra(self):
+        """Prompt for channel name selection for intracranial file."""
         if self.dataset_intra.raw_data:
             try:
                 channel_names = self.dataset_intra.ch_names  # List of channel names
@@ -368,35 +395,36 @@ class SyncGUI(QMainWindow):
                 if ok and channel_name:  # Check if a channel was selected
                     self.dataset_intra.selected_channel_name = channel_name
                     self.dataset_intra.selected_channel_index = channel_names.index(channel_name)  # Get the index of the selected channel
-                    self.channel_label_mat.setText(f"Selected Channel: {channel_name}")
+                    self.channel_label_intra.setText(f"Selected Channel: {channel_name}")
+                    self.dataset_intra.max_y_value = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index].max()
                     # Enable the plot button since a channel has been selected
-                    self.btn_plot_channel_mat.setEnabled(True)
-                    self.btn_artifact_detect_mat.setEnabled(True)    
-                    self.label_automatic_artifact_time_mat.setVisible(True)   
-                    self.btn_manual_select_artifact_mat.setEnabled(True)
-                    self.label_manual_artifact_time_mat.setVisible(True)
+                    self.btn_plot_channel_intra.setEnabled(True)
+                    self.btn_artifact_detect_intra.setEnabled(True)    
+                    self.label_automatic_artifact_time_intra.setVisible(True)   
+                    self.btn_manual_select_artifact_intra.setEnabled(True)
+                    self.label_manual_artifact_time_intra.setVisible(True)
                     
 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to select channel: {e}")
 
 
-    def plot_channel_mat(self):
-        """Plot the selected channel data from the .mat file."""
+    def plot_channel_intra(self):
+        """Plot the selected channel data from the intracranial file."""
         if self.dataset_intra.raw_data and self.dataset_intra.selected_channel_index is not None:
-            self.canvas_mat.setEnabled(True)
-            self.toolbar_mat.setEnabled(True)
-            self.ax_mat.clear()
+            self.canvas_intra.setEnabled(True)
+            self.toolbar_intra.setEnabled(True)
+            self.ax_intra.clear()
             channel_data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index]
             times = self.dataset_intra.times
-            self.ax_mat.plot(times, channel_data)
-            self.ax_mat.set_title(f"Channel {self.dataset_intra.selected_channel_index} data - {self.dataset_intra.selected_channel_name}")
-            self.ax_mat.set_xlabel("Time (s)")
-            self.ax_mat.set_ylabel("Amplitude")
-            self.canvas_mat.draw()
+            self.ax_intra.plot(times, channel_data)
+            self.ax_intra.set_title(f"Channel {self.dataset_intra.selected_channel_index} data - {self.dataset_intra.selected_channel_name}")
+            self.ax_intra.set_xlabel("Time (s)")
+            self.ax_intra.set_ylabel("Amplitude")
+            self.canvas_intra.draw()
 
 
-    def detect_artifacts_mat(self):
+    def detect_artifacts_intra(self):
         thres_window = round(self.dataset_intra.sf * 2)
         data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index]
         thres = np.ptp(data[:thres_window])
@@ -411,57 +439,57 @@ class SyncGUI(QMainWindow):
         )[0][-1]
         self.dataset_intra.art_start = stim_idx / self.dataset_intra.sf
         print(f"Artifact detected in LFP data at time: {self.dataset_intra.art_start} s")
-        self.plot_scatter_channel_mat(art_start_mat = self.dataset_intra.art_start)
+        self.plot_scatter_channel_intra(art_start_intra = self.dataset_intra.art_start)
         self.update_synchronize_button_state()  # Check if we can enable the button
-        self.label_automatic_artifact_time_mat.setText(f"Artifact start: {self.dataset_intra.art_start} s")
+        self.label_automatic_artifact_time_intra.setText(f"Artifact start: {self.dataset_intra.art_start} s")
 
 
-    def plot_scatter_channel_mat(self, art_start_mat=None):
+    def plot_scatter_channel_intra(self, art_start_intra=None):
         """Plot scatter plot of the selected channel data."""
         
-        self.toolbar_mat.setEnabled(True)
-        self.canvas_mat.setEnabled(True)
-        self.ax_mat.clear()
+        self.toolbar_intra.setEnabled(True)
+        self.canvas_intra.setEnabled(True)
+        self.ax_intra.clear()
         
         # Plot the channel data
         channel_data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index]
         times = self.dataset_intra.raw_data.times  # Time vector corresponding to the data points
         
         # Plot scatter points
-        start = int(round(art_start_mat * self.dataset_intra.sf)-round(self.dataset_intra.sf/10))
-        end = int(round(art_start_mat * self.dataset_intra.sf)+round(self.dataset_intra.sf/10))
+        start = int(round(art_start_intra * self.dataset_intra.sf)-round(self.dataset_intra.sf/10))
+        end = int(round(art_start_intra * self.dataset_intra.sf)+round(self.dataset_intra.sf/10))
         times_array = np.array(times)
         channel_data_array = np.array(channel_data)
-        self.ax_mat.scatter(times_array[start:end], channel_data_array[start:end], s=5)
+        self.ax_intra.scatter(times_array[start:end], channel_data_array[start:end], s=5)
 
 
         # Highlight artifact start points if available
-        if art_start_mat is not None:
-                self.ax_mat.axvline(x=art_start_mat, color='red', linestyle='--', label='Artifact Start')
+        if art_start_intra is not None:
+                self.ax_intra.axvline(x=art_start_intra, color='red', linestyle='--', label='Artifact Start')
 
-        self.ax_mat.legend()
+        self.ax_intra.legend()
         
         # Allow interactive features like zoom and pan
-        self.canvas_mat.draw()
+        self.canvas_intra.draw()
 
 
 
-    def manual_selection_mat(self):
-        self.toolbar_mat.setEnabled(True)
-        self.canvas_mat.setEnabled(True)
-        self.ax_mat.clear()
+    def manual_selection_intra(self):
+        self.toolbar_intra.setEnabled(True)
+        self.canvas_intra.setEnabled(True)
+        self.ax_intra.clear()
         data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index]
         timescale = self.dataset_intra.times
 
         pos = []
 
-        self.ax_mat.scatter(timescale, data, s=8)
-        self.canvas_mat.draw()
-        self.ax_mat.set_title(
+        self.ax_intra.scatter(timescale, data, s=8)
+        self.canvas_intra.draw()
+        self.ax_intra.set_title(
             'Right click on the plot to select the start of the artifact (shown by the black "+")'
         )
 
-        (plus_symbol,) = self.ax_mat.plot([], [], "k+", markersize=10)
+        (plus_symbol,) = self.ax_intra.plot([], [], "k+", markersize=10)
 
         def onclick(event):
             if event.inaxes is not None:  # Check if the click is inside the axes
@@ -473,12 +501,12 @@ class SyncGUI(QMainWindow):
                     closest_value_x = timescale[closest_index_x]
                     closest_value_y = data[closest_index_x]
                     plus_symbol.set_data([closest_value_x], [closest_value_y])
-                    self.canvas_mat.draw()
+                    self.canvas_intra.draw()
                     self.dataset_intra.art_start = closest_value_x
-                    self.label_manual_artifact_time_mat.setText(f"Selected Artifact start: {closest_value_x} s")
+                    self.label_manual_artifact_time_intra.setText(f"Selected Artifact start: {closest_value_x} s")
                     self.update_synchronize_button_state()
 
-        self.canvas_mat.mpl_connect("button_press_event", onclick)
+        self.canvas_intra.mpl_connect("button_press_event", onclick)
         
     
 
@@ -491,8 +519,8 @@ class SyncGUI(QMainWindow):
         layout = QVBoxLayout()
 
         # File selection button for .xdf
-        self.btn_load_file_xdf = Button("Load .xdf File", "lightgreen")
-        self.btn_load_file_xdf.clicked.connect(self.load_xdf_file)
+        self.btn_load_file_xdf = Button("Load external file (supported formats: .Poly5, .xdf)", "lightgreen")
+        self.btn_load_file_xdf.clicked.connect(self.load_ext_file)
         layout.addWidget(self.btn_load_file_xdf)
 
         # Create a label to display the selected file name
@@ -570,28 +598,54 @@ class SyncGUI(QMainWindow):
         return layout
 
 
-    def load_xdf_file(self):
-        """Load .xdf file."""
-        file_name, _ = QFileDialog.getOpenFileName(self, "Select XDF File", "", "XDF Files (*.xdf);;All Files (*)")
+    def load_ext_file(self):
+        """Load external file. Supported file formats are .xdf, .poly5"""
+        file_name, _ = QFileDialog.getOpenFileName(self, "Select External File", "", "All Files (*);;XDF Files (*.xdf);;Poly5 Files (*.Poly5)")
         self.file_label_xdf.setText(f"Selected File: {basename(file_name)}")
         self.dataset_extra.file_name = basename(file_name)
         self.dataset_extra.file_path = dirname(file_name)
         
-        if file_name:
-            try:
-                # Load the .xdf file using the read_raw function
-                stream_id = self.find_EEG_stream(file_name, stream_name='SAGA')
-                raw_data = read_raw(file_name, stream_ids=[stream_id], preload=True)
-                self.dataset_extra.raw_data = raw_data
-                self.dataset_extra.sf = raw_data.info["sfreq"]  # Get the sampling frequency
-                self.dataset_extra.ch_names = raw_data.ch_names  # Get the channel names
-                self.dataset_extra.times = raw_data.times # Get the timescale
+        if file_name.endswith(".xdf"):
+            self.load_xdf_file(file_name)
 
-                # Show channel selection and plot buttons for .xdf
-                self.channel_label_xdf.setEnabled(True)
-                self.btn_select_channel_xdf.setEnabled(True)
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to load .xdf file: {e}")
+        elif file_name.endswith(".Poly5"):
+                self.load_poly5_file(file_name)
+
+
+    def load_poly5_file(self, file_name):
+        """Load .poly5 file."""
+        try:
+            TMSi_data = Poly5Reader(file_name)
+            toMNE = True
+            TMSi_rec = TMSi_data.read_data_MNE()
+            self.dataset_extra.raw_data = TMSi_rec
+            self.dataset_extra.sf = TMSi_rec.info["sfreq"]  # Get the sampling frequency
+            self.dataset_extra.ch_names = TMSi_rec.ch_names  # Get the channel names
+            self.dataset_extra.times = TMSi_rec.times # Get the timescale
+
+            # Show channel selection and plot buttons for .xdf
+            self.channel_label_xdf.setEnabled(True)
+            self.btn_select_channel_xdf.setEnabled(True)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load .poly5 file: {e}")
+
+
+    def load_xdf_file(self, file_name):
+        """Load .xdf file."""
+        try:
+            # Load the .xdf file using the read_raw function
+            stream_id = self.find_EEG_stream(file_name, stream_name='SAGA')
+            raw_data = read_raw(file_name, stream_ids=[stream_id], preload=True)
+            self.dataset_extra.raw_data = raw_data
+            self.dataset_extra.sf = raw_data.info["sfreq"]  # Get the sampling frequency
+            self.dataset_extra.ch_names = raw_data.ch_names  # Get the channel names
+            self.dataset_extra.times = raw_data.times # Get the timescale
+
+            # Show channel selection and plot buttons for .xdf
+            self.channel_label_xdf.setEnabled(True)
+            self.btn_select_channel_xdf.setEnabled(True)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load .xdf file: {e}")
 
 
     def select_channel_xdf(self):
@@ -619,6 +673,10 @@ class SyncGUI(QMainWindow):
                 if selected_items:
                     self.dataset_extra.selected_channel_name = selected_items[0].text()  # Get the selected channel name
                     self.dataset_extra.selected_channel_index = channel_names.index(self.dataset_extra.selected_channel_name)  # Get the index
+                    channel_data = self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index]
+                    detrended_data = self.detrend_data(channel_data)
+                    self.dataset_extra.min_y_value = detrended_data.min()
+                    self.dataset_extra.max_y_value = detrended_data.max()
                     self.channel_label_xdf.setText(f"Selected Channel: {self.dataset_extra.selected_channel_name}")
                     self.btn_plot_channel_xdf.setEnabled(True)
                     dialog.close()
@@ -1058,14 +1116,98 @@ class SyncGUI(QMainWindow):
         QMessageBox.information(self, "Synchronization", "Synchronization done. Everything saved as one .pickle file")
 
 
+
+    def synchronize_datasets_as_mat(self):
+        index_start_LFP = (self.dataset_intra.art_start - 1) * self.dataset_intra.sf
+        LFP_array = self.dataset_intra.raw_data.get_data()
+        LFP_cropped = LFP_array[:, int(index_start_LFP) :].T
+
+        ## External ##
+        # Crop beginning of external recordings 1s before first artifact:
+        time_start_external = (self.dataset_extra.art_start) - 1
+        index_start_external = time_start_external * self.dataset_extra.sf
+        external_file = self.dataset_extra.raw_data.get_data()
+        external_cropped = external_file[:, int(index_start_external) :].T
+
+        # Check which recording is the longest,
+        # crop it to give it the same duration as the other one:
+        LFP_rec_duration = len(LFP_cropped) / self.dataset_intra.sf
+        external_rec_duration = len(external_cropped) / self.dataset_extra.sf
+
+        if LFP_rec_duration > external_rec_duration:
+            index_stop_LFP = external_rec_duration * self.dataset_intra.sf
+            LFP_synchronized = LFP_cropped[: int(index_stop_LFP), :]
+            external_synchronized = external_cropped
+        elif external_rec_duration > LFP_rec_duration:
+            index_stop_external = LFP_rec_duration * self.dataset_extra.sf
+            external_synchronized = external_cropped[: int(index_stop_external), :]
+            LFP_synchronized = LFP_cropped
+        else:
+            LFP_synchronized = LFP_cropped
+            external_synchronized = external_cropped  
+
+        # save the synchronized data in mat format          
+        LFP_df_offset = pd.DataFrame(LFP_synchronized)
+        LFP_df_offset.columns = self.dataset_intra.ch_names
+        external_df_offset = pd.DataFrame(external_synchronized)
+        external_df_offset.columns = self.dataset_extra.ch_names
+
+        lfp_title = ("SYNCHRONIZED_INTRACRANIAL_" + str(self.dataset_intra.file_name[:-4]) + ".mat")
+        external_title = (f"SYNCHRONIZED_EXTERNAL_" + str(self.dataset_extra.file_name[:-6]) + ".mat")
+        
+        if self.folder_path is not None:
+            LFP_filename = join(self.folder_path, lfp_title)
+            external_filename = join(self.folder_path, external_title)
+        else:
+            LFP_filename = lfp_title
+            external_filename = external_title
+
+        savemat(
+            LFP_filename,
+            {
+                "data": LFP_df_offset.T,
+                "fsample": self.dataset_intra.sf,
+                "label": np.array(
+                    LFP_df_offset.columns.tolist(), dtype=object
+                ).reshape(-1, 1),
+            },
+        )
+        savemat(
+            external_filename,
+            {
+                "data": external_df_offset.T,
+                "fsample": self.dataset_extra.sf,
+                "label": np.array(
+                    external_df_offset.columns.tolist(), dtype=object
+                ).reshape(-1, 1),
+            },
+        )
+        QMessageBox.information(self, "Synchronization", "Synchronization done. Both files saved as .mat files")       
+
+
     def plot_synced_channels(self):
         self.toolbar_synced.setEnabled(True)
         self.canvas_synced.setEnabled(True)
         self.ax_synced.clear()
 
+        # scale y-axis to the same range for both channels by modifying the ylim for the external channel:
+        y_max_factor = self.dataset_intra.max_y_value / self.dataset_extra.max_y_value
+        print(f"data_intra max: {self.dataset_intra.max_y_value}")
+        print(f"data_extra max: {self.dataset_extra.max_y_value}")
+        print(f"y_max_factor: {y_max_factor}")
+
         # Plot the external channel synchronized
         data_extra = self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index]
-        data_extra_detrended = self.detrend_data(data_extra)
+        data_extra_scaled = data_extra * y_max_factor
+        """
+        if y_max_factor > 1:
+            data_extra_scaled = data_extra * y_max_factor
+        elif y_max_factor < 1:
+            data_extra_scaled = data_extra / y_max_factor
+        else:
+            data_extra_scaled = data_extra
+        """
+        data_extra_detrended = self.detrend_data(data_extra_scaled)
         timescale_extra = self.dataset_extra.times
         art_start_0_extra = self.dataset_extra.art_start - 1
         # Find the index in self.dataset_extra.times corresponding to art_start_0
@@ -1089,12 +1231,12 @@ class SyncGUI(QMainWindow):
         self.ax_synced.scatter(offset_timescale_intra, offset_data_intra, s=8, color='#6495ED', label='Intracranial')
         self.ax_synced.legend(loc='upper left')
         self.canvas_synced.draw()
-        self.btn_select_last_art_mat.setEnabled(True)
+        self.btn_select_last_art_intra.setEnabled(True)
         self.btn_select_last_art_xdf.setEnabled(True)
 
 
 
-    def select_last_artifact_mat(self):
+    def select_last_artifact_intra(self):
         # Check if we're already in external selection mode and prevent interference
         if hasattr(self, 'cid_extra') and self.cid_extra is not None:
             self.canvas_synced.mpl_disconnect(self.cid_extra)
@@ -1128,7 +1270,7 @@ class SyncGUI(QMainWindow):
                     self.canvas_synced.draw()
 
                     self.dataset_intra.last_artifact = closest_value_x_intra
-                    self.label_select_last_art_mat.setText(f"Selected last artifact start: {self.dataset_intra.last_artifact} s")
+                    self.label_select_last_art_intra.setText(f"Selected last artifact start: {self.dataset_intra.last_artifact} s")
                     self.update_timeshift_button_state()
 
         # Connect and store the ID of the intracranial event listener
@@ -1186,15 +1328,19 @@ class SyncGUI(QMainWindow):
     def update_synchronize_button_state(self):
         """Enable or disable the synchronize button based on file selection."""
         if self.dataset_intra.art_start is not None and self.dataset_extra.art_start is not None:
-            self.btn_sync_as_set.setEnabled(True)
-            self.btn_sync_as_pickle.setEnabled(True)
-            self.btn_all_as_pickle.setEnabled(True)
+            if self.dataset_extra.file_name.endswith(".xdf"):
+                self.btn_sync_as_set.setEnabled(True)
+                self.btn_sync_as_pickle.setEnabled(True)
+                self.btn_all_as_pickle.setEnabled(True)
+            elif self.dataset_extra.file_name.endswith(".Poly5"):
+                self.btn_sync_as_mat.setEnabled(True)
             self.switch_to_second_page_button.setEnabled(True)
             self.switch_to_second_page_button.setEnabled(True)
         else:
             self.btn_sync_as_set.setEnabled(False)
             self.btn_sync_as_pickle.setEnabled(False)
             self.btn_all_as_pickle.setEnabled(False)
+            self.btn_sync_as_mat.setEnabled(False)
             self.switch_to_second_page_button.setEnabled(False)
             self.switch_to_second_page_button.setEnabled(False)
 

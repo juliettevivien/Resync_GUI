@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import mne
 from mne.io import read_raw_fieldtrip  # Import necessary functions
 from mnelab.io.readers import read_raw
-from os.path import join, basename, dirname
+from os.path import join, basename, dirname, exists
 from pyxdf import resolve_streams
 import scipy
 from scipy.io import savemat
@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 from copy import deepcopy
 import pickle
+import webbrowser
 
 # import modules
 from pyxdftools.xdfdata import XdfData
@@ -104,18 +105,21 @@ class SyncGUI(QMainWindow):
         # Create the header with navigation buttons
         header_layout = QHBoxLayout()
         self.menu_label = QLabel("MENU")
-        self.btn_first = Button("Home Page","#FFDAB9")
+        self.btn_first = Button("Home Page","#cd9ddc")
         self.btn_first.clicked.connect(self.show_first_page)
-        self.btn_second = Button("Effective Sampling Frequency correction", "#FFDAB9")
+        self.btn_second = Button("Effective Sampling Frequency correction", "#cd9ddc")
         self.btn_second.clicked.connect(self.show_second_page)
-        self.btn_third = Button("Timeshift Analysis", "#FFDAB9")
+        self.btn_third = Button("Timeshift Analysis", "#cd9ddc")
         self.btn_third.clicked.connect(self.show_third_page)
+        self.btn_help = Button("Help", "#cd9ddc")
+        self.btn_help.clicked.connect(self.show_help)
 
         # Add buttons to the header layout
         header_layout.addWidget(self.menu_label)
         header_layout.addWidget(self.btn_first)
         header_layout.addWidget(self.btn_second)
         header_layout.addWidget(self.btn_third)
+        header_layout.addWidget(self.btn_help)
         header_layout.addStretch()
 
         # Create a widget for the header layout
@@ -138,7 +142,7 @@ class SyncGUI(QMainWindow):
         self.reset_button.clicked.connect(self.reset_app)
         self.reset_button.setStyleSheet("""
             QPushButton {
-                background-color: "#FFDAB9";
+                background-color: "#cd9ddc";
                 color: black;
                 font-size: 18px;
                 border-radius: 10px;
@@ -146,7 +150,7 @@ class SyncGUI(QMainWindow):
                 padding: 5px 30px;
             }
             QPushButton:hover {
-                background-color: #f0f0f0;
+                background-color: "lightgray";
             }
         """)
         footer_layout.addWidget(self.reset_button)
@@ -388,7 +392,14 @@ class SyncGUI(QMainWindow):
         self.update_button_styles(self.btn_third)
         self.update_plot_sync_channels_state()
 
-
+    def show_help(self):
+        # Path to the HTML file stored in the GUI folder
+        help_file_folder = join(dirname(__file__), "help")
+        help_file_path = join(help_file_folder, 'info.html')
+        if exists(help_file_path):
+            webbrowser.open(f'file://{help_file_path}')
+        else:
+            print("Help file not found.")
 
     def create_panel_intra_sf_correction(self):
         """Create the left panel for intracranial file processing."""
@@ -1201,9 +1212,13 @@ class SyncGUI(QMainWindow):
         inv_dic = {v: str(k) for k, v in _.items()}
 
         ## offset intracranial recording (crop everything that is more than 1s before the artifact)
-        tmax_lfp = max(self.dataset_intra.times)
+        #tmax_lfp = self.dataset_intra.times[-2]
+        tmax_lfp = max(self.dataset_intra.raw_data.times)
         new_start_intracranial = self.dataset_intra.art_start - 1
         lfp_rec_offset = self.dataset_intra.raw_data.copy().crop(tmin=new_start_intracranial, tmax=tmax_lfp)
+        print(f"last timestamp is: {self.dataset_intra.raw_data.times[-1]}")
+        print(f"second to last timestamp is: {self.dataset_intra.raw_data.times[-2]}")
+
 
         ## offset external recording (crop everything that is more than 1s before the artifact)
         tmax_external = max(self.dataset_extra.times)

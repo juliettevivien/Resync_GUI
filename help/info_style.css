@@ -1,0 +1,152 @@
+a {
+    text-decoration: none;
+    color: #000000;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+
+body {
+    margin: 0; /* Reset default margin */
+    display: flex; /* Use flexbox for layout */
+    flex-direction: column; /* Stack children vertically */
+}
+
+h1, h2, h3, h4 {
+    font-family: 'Manrope', sans-serif;
+}
+
+p, li {
+    font-family: 'Nunito', sans-serif;
+}
+
+section {
+    margin-bottom: 20px; /* Space between sections */
+    padding: 15px; /* Padding inside each section for better readability */
+    background-color: #fff; /* Optional background color for sections */
+}
+
+
+.clickable-link {
+    text-decoration: underline; /* Add underline to links */
+    cursor: pointer; /* Change cursor to pointer on hover */
+}
+
+.clickable-link:hover {
+    text-decoration: none; 
+}
+
+
+.menu-header {
+    font-family: 'Manrope', sans-serif;
+    font-size: 1.5em;
+}
+
+.colored-numbers {
+    list-style-type: none; /* Remove default list styles */
+    counter-reset: list; /* Initialize the counter */
+}
+
+.colored-numbers > li {
+    counter-increment: list; /* Increment the counter for each direct li child */
+    position: relative; /* Position relative for absolute positioning of the number */
+    margin-bottom: 10px; /* Adjust this value to change the space between list items */
+}
+
+.colored-numbers > li::before {
+    content: counter(list); /* Add the counter before each list item */
+    position: absolute; /* Position absolutely for better control */
+    left: -1.5em; /* Adjust to position the number */
+    top: -0.3em;
+    color: #cd9ddc; /* Change to your desired color */
+    font-weight: bold; /* Optional: Add bold font weight */
+    font-size: 1.2em; /* Optional: Adjust font size */
+    font-family: 'Manrope', sans-serif; /* Optional: Change font family */
+}
+
+/* Style adjustments for the nested ul to prevent them from inheriting ol styles */
+.colored-numbers ul {
+    list-style-type: disc; /* Change to bullet points */
+    margin-left: 1.5em; /* Add left margin to align with the text */
+    counter-reset: none; /* Ensure no counters are applied */
+}
+
+.colored-numbers ul li {
+    position: static; /* Remove relative positioning */
+    margin-bottom: 5px; /* Adjust spacing between items in the ul */
+}
+
+.colored-numbers ul li::before {
+    content: none; /* Prevent counters from appearing before ul li items */
+}
+
+.code-text {
+    font-family: 'Courier New', monospace;
+    background-color: #f0f0f0; /* Optional background color for code blocks */
+    padding: 1px; /* Add padding for spacing inside the code block */
+    margin: 3px 0; /* Add margin for spacing around the code block */
+    border-radius: 5px; /* Optional border radius for code blocks */
+}
+
+.logo-img {
+    height: 25px;
+    margin: 10px 20px 5px 20px;
+}
+
+.logo-resync {
+    height: 75px;
+    margin: 10px 10px 10px 10px;
+}
+
+
+.footer {
+    background: linear-gradient(to right, #99CCFF, #99ff99);
+    display: flex;
+    justify-content: center;
+}
+
+.header {
+    background-color: #ffffff;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    margin: 0px 30px 0px 30px;
+}
+
+.title-main-header {
+    display: flex;
+    justify-content: center;
+}
+
+.main-text {
+    margin-right: 240px; /* Ensure this is still here for extra space */
+    padding: 20px; /* Add padding for spacing inside the text box */
+    margin-top: -9.5vh; /* Set margin-top to align with the top of the menu */
+}
+
+
+.main-widget {
+    display:flex;
+    flex-direction: row;
+    justify-content: space-between;
+}
+
+
+#menu {
+    position: fixed; /* Keep the menu fixed */
+    top: 50%; /* Center vertically */
+    right: 0; /* Align to the right */
+    transform: translateY(-50%); /* Adjust to true center */
+    width: 220px; /* Set a width for the menu */
+    background-color: rgba(153, 255, 153, 0.25); /* Optional background color */
+    border: 1px solid #ccc; /* Optional border */
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2); /* Optional shadow */
+    z-index: 1000; /* Ensure menu is on top */
+}
+
+#installation, #usage, #general-information, #sync-protocol {
+    border: 1px solid #ccc; /* Optional border for sections */
+    background-color: rgb(153, 204, 255, 0.25); /* Optional background color for sections */
+}

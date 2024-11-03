@@ -3,6 +3,7 @@ import matplotlib
 matplotlib.use('Qt5Agg')
 import PyQt5
 from PyQt5.QtWidgets import QLabel, QApplication, QMainWindow, QListWidget, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QInputDialog, QMessageBox, QStackedWidget
+from PyQt5.QtGui import QIcon
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.backend_bases import MouseButton
@@ -89,6 +90,7 @@ class SyncGUI(QMainWindow):
         
         # Set up the main window
         self.setWindowTitle("ReSync GUI")
+        self.setWindowIcon(QIcon("logo_resized.png"))
         self.setGeometry(100, 100, 1000, 600)
 
         # Create a stacked widget to hold multiple pages

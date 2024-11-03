@@ -38,6 +38,19 @@ section {
     text-decoration: none; 
 }
 
+.gui-screenshot {
+    display: block; /* Display block for better alignment */
+    margin: 10px auto; /* Center the image */
+    max-width: 100%; /* Ensure image does not exceed container width */
+    border: 1px solid #ccc; /* Optional border for images */
+    border-radius: 5px; /* Optional border radius for images */
+}
+
+.img-legend {
+    font-size: 0.8em; /* Adjust font size for image legend */
+    text-align: left;
+    margin-top: 5px; /* Add margin to separate image from legend */
+}
 
 .menu-header {
     font-family: 'Manrope', sans-serif;

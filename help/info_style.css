@@ -7,11 +7,11 @@ a:hover {
     text-decoration: underline;
 }
 
-
 body {
     margin: 0; /* Reset default margin */
     display: flex; /* Use flexbox for layout */
     flex-direction: column; /* Stack children vertically */
+    padding: 1rem; /* Add padding for small screens */
 }
 
 h1, h2, h3, h4 {
@@ -23,101 +23,98 @@ p, li {
 }
 
 section {
-    margin-bottom: 20px; /* Space between sections */
-    padding: 15px; /* Padding inside each section for better readability */
-    background-color: #fff; /* Optional background color for sections */
+    margin-bottom: 2rem; /* Adjusted for better spacing */
+    padding: 2vw; /* Scales based on viewport width */
+    background-color: #fff;
 }
 
-
 .clickable-link {
-    text-decoration: underline; /* Add underline to links */
-    cursor: pointer; /* Change cursor to pointer on hover */
+    text-decoration: underline;
+    cursor: pointer;
 }
 
 .clickable-link:hover {
-    text-decoration: none; 
+    text-decoration: none;
 }
 
 .gui-screenshot {
-    display: block; /* Display block for better alignment */
-    margin: 10px auto; /* Center the image */
+    display: block;
+    margin: 1rem auto;
     max-width: 100%; /* Ensure image does not exceed container width */
-    border: 1px solid #ccc; /* Optional border for images */
-    border-radius: 5px; /* Optional border radius for images */
+    border: 1px solid #ccc;
+    border-radius: 0.5rem;
 }
 
 .img-legend {
-    font-size: 0.8em; /* Adjust font size for image legend */
+    font-size: 0.8rem;
     text-align: left;
-    margin-top: 5px; /* Add margin to separate image from legend */
+    margin-top: 0.5rem;
 }
 
 .menu-header {
     font-family: 'Manrope', sans-serif;
-    font-size: 1.5em;
+    font-size: 1.5rem; /* Scales better with rem */
 }
 
 .colored-numbers {
-    list-style-type: none; /* Remove default list styles */
-    counter-reset: list; /* Initialize the counter */
+    list-style-type: none;
+    counter-reset: list;
 }
 
 .colored-numbers > li {
-    counter-increment: list; /* Increment the counter for each direct li child */
-    position: relative; /* Position relative for absolute positioning of the number */
-    margin-bottom: 10px; /* Adjust this value to change the space between list items */
+    counter-increment: list;
+    position: relative;
+    margin-bottom: 1rem;
 }
 
 .colored-numbers > li::before {
-    content: counter(list); /* Add the counter before each list item */
-    position: absolute; /* Position absolutely for better control */
-    left: -1.5em; /* Adjust to position the number */
-    top: -0.3em;
-    color: #cd9ddc; /* Change to your desired color */
-    font-weight: bold; /* Optional: Add bold font weight */
-    font-size: 1.2em; /* Optional: Adjust font size */
-    font-family: 'Manrope', sans-serif; /* Optional: Change font family */
+    content: counter(list);
+    position: absolute;
+    left: -2rem; /* Adjusted to align better on smaller screens */
+    top: -0.2rem;
+    color: #cd9ddc;
+    font-weight: bold;
+    font-size: 1.2rem;
+    font-family: 'Manrope', sans-serif;
 }
 
-/* Style adjustments for the nested ul to prevent them from inheriting ol styles */
 .colored-numbers ul {
-    list-style-type: disc; /* Change to bullet points */
-    margin-left: 1.5em; /* Add left margin to align with the text */
-    counter-reset: none; /* Ensure no counters are applied */
+    list-style-type: disc;
+    margin-left: 1.5em;
+    counter-reset: none;
 }
 
 .colored-numbers ul li {
-    position: static; /* Remove relative positioning */
-    margin-bottom: 5px; /* Adjust spacing between items in the ul */
+    margin-bottom: 0.5rem;
 }
 
 .colored-numbers ul li::before {
-    content: none; /* Prevent counters from appearing before ul li items */
+    content: none;
 }
 
 .code-text {
     font-family: 'Courier New', monospace;
-    background-color: #f0f0f0; /* Optional background color for code blocks */
-    padding: 1px; /* Add padding for spacing inside the code block */
-    margin: 3px 0; /* Add margin for spacing around the code block */
-    border-radius: 5px; /* Optional border radius for code blocks */
+    background-color: #f0f0f0;
+    padding: 0.5rem;
+    margin: 0.5rem 0;
+    border-radius: 0.5rem;
 }
 
 .logo-img {
-    height: 25px;
-    margin: 10px 20px 5px 20px;
+    height: 2vw; /* Responsive unit */
+    margin: 1rem 2vw 0.5rem 2vw;
 }
 
 .logo-resync {
-    height: 75px;
-    margin: 10px 10px 10px 10px;
+    height: 5vw; /* Adjusts with viewport */
+    margin: 1rem;
 }
-
 
 .footer {
     background: linear-gradient(to right, #99CCFF, #99ff99);
     display: flex;
     justify-content: center;
+    padding: 1rem;
 }
 
 .header {
@@ -125,7 +122,7 @@ section {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
-    margin: 0px 30px 0px 30px;
+    margin: 0 5vw; /* Adjust margin based on viewport */
 }
 
 .title-main-header {
@@ -134,32 +131,82 @@ section {
 }
 
 .main-text {
-    margin-right: 240px; /* Ensure this is still here for extra space */
-    padding: 20px; /* Add padding for spacing inside the text box */
-    margin-top: -9.5vh; /* Set margin-top to align with the top of the menu */
+    margin-right: 15vw; /* Relative to viewport width */
+    padding: 2rem;
+    margin-top: -10vh;
 }
-
 
 .main-widget {
-    display:flex;
+    display: flex;
     flex-direction: row;
     justify-content: space-between;
+    flex-wrap: wrap; /* Allows wrapping for smaller screens */
 }
 
-
 #menu {
-    position: fixed; /* Keep the menu fixed */
-    top: 50%; /* Center vertically */
-    right: 0; /* Align to the right */
-    transform: translateY(-50%); /* Adjust to true center */
-    width: 220px; /* Set a width for the menu */
-    background-color: rgba(153, 255, 153, 0.25); /* Optional background color */
-    border: 1px solid #ccc; /* Optional border */
-    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2); /* Optional shadow */
-    z-index: 1000; /* Ensure menu is on top */
+    position: fixed;
+    top: 50%;
+    right: 0;
+    transform: translateY(-50%);
+    width: 15vw; /* Relative width */
+    max-width: 220px; /* Cap maximum width */
+    background-color: rgba(153, 255, 153, 0.25);
+    border: 1px solid #ccc;
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+    z-index: 1000;
 }
 
 #installation, #usage, #general-information, #sync-protocol {
-    border: 1px solid #ccc; /* Optional border for sections */
-    background-color: rgb(153, 204, 255, 0.25); /* Optional background color for sections */
+    border: 1px solid #ccc;
+    background-color: rgba(153, 204, 255, 0.25);
+}
+
+/* Media queries for smaller screens */
+@media (max-width: 768px) {
+    .header {
+        flex-direction: column; /* Stack header elements */
+        margin: 1rem;
+    }
+
+    .main-text {
+        margin-right: 0;
+        margin-top: 0;
+        padding: 1rem;
+    }
+
+    #menu {
+        width: 30vw; /* Adjust menu size */
+        max-width: 180px;
+    }
+
+    .logo-img, .logo-resync {
+        height: auto;
+        max-width: 50%; /* Scale logo down */
+    }
+}
+
+
+/* Adjust styles for .code-text when printing */
+@media print {
+    #menu {
+        display: none;
+    }
+
+    .footer {
+        display: none;
+    }
+
+    .main-text {
+        margin: 0;
+        padding: 1rem;
+    }
+
+    .code-text {
+        font-size: 0.9rem; /* Reduce font size for printing */
+        word-wrap: break-word; /* Allow code to wrap to the next line */
+        white-space: pre-wrap; /* Ensure code blocks break lines properly */
+        background-color: transparent; /* Remove background color for better printing */
+        border: none; /* Remove borders to simplify appearance */
+        padding: 0.2rem; /* Reduce padding */
+    }
 }

@@ -96,8 +96,34 @@ def load_xdf_artifact_channel(
 
 ##############################  OUTPUT FUNCTIONS  ##############################
 
-def write_set(fname, raw, annotations_onset):
+def write_set(fname, raw, annotations_onset, fs, times):
     """Export raw to EEGLAB .set file."""
+    data = raw.get_data() * 1e6  # convert to microvolts
+    ch_names = raw.info["ch_names"]
+    chanlocs = fromarrays([ch_names], names=["labels"])
+    events = fromarrays([raw.annotations.description,
+                         annotations_onset * fs + 1,
+                         raw.annotations.duration * fs],
+                        names=["type", "latency", "duration"])
+    savemat(fname, dict(EEG=dict(data=data,
+                                 setname=fname,
+                                 nbchan=data.shape[0],
+                                 pnts=data.shape[1],
+                                 trials=1,
+                                 srate=fs,
+                                 xmin=times[0],
+                                 xmax=times[-1],
+                                 chanlocs=chanlocs,
+                                 event=events,
+                                 icawinv=[],
+                                 icasphere=[],
+                                 icaweights=[])),
+            appendmat=False)
+
+
+"""
+def write_set(fname, raw, annotations_onset):  # didn't work when we needed to update the effective sampling frequency of the intracranial data
+    '''Export raw to EEGLAB .set file.'''
     data = raw.get_data() * 1e6  # convert to microvolts
     fs = raw.info["sfreq"]
     times = raw.times
@@ -121,4 +147,4 @@ def write_set(fname, raw, annotations_onset):
                                  icasphere=[],
                                  icaweights=[])),
             appendmat=False)
-    
+"""

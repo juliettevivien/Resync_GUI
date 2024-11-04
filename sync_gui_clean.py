@@ -781,6 +781,7 @@ class SyncGUI(QMainWindow):
                 raw_data = read_raw_fieldtrip(file_name, info={}, data_name="data")
                 self.dataset_intra.raw_data = raw_data  # Assign to dataset
                 self.dataset_intra.sf = raw_data.info["sfreq"]  # Assign sampling frequency
+                print(f"Sampling frequency of the intracranial recording: {self.dataset_intra.sf}")
                 self.dataset_intra.ch_names = raw_data.ch_names  # Assign channel names#
                 self.dataset_intra.times = np.linspace(0, raw_data.get_data().shape[1]/self.dataset_intra.sf, raw_data.get_data().shape[1])
                 self.file_label_intra.setText(f"Selected File: {basename(file_name)}")
@@ -1218,9 +1219,7 @@ class SyncGUI(QMainWindow):
         tmax_lfp = max(self.dataset_intra.raw_data.times)
         new_start_intracranial = self.dataset_intra.art_start - 1
         lfp_rec_offset = self.dataset_intra.raw_data.copy().crop(tmin=new_start_intracranial, tmax=tmax_lfp)
-        print(f"last timestamp is: {self.dataset_intra.raw_data.times[-1]}")
-        print(f"second to last timestamp is: {self.dataset_intra.raw_data.times[-2]}")
-
+        print(f"tmax_lfp for cropping is: {tmax_lfp}")
 
         ## offset external recording (crop everything that is more than 1s before the artifact)
         tmax_external = max(self.dataset_extra.times)
@@ -1264,8 +1263,27 @@ class SyncGUI(QMainWindow):
         TMSi_rec_offset_annotations_onset= (TMSi_rec_offset.annotations.onset) - new_start_external
         lfp_rec_offset_annotations_onset= (lfp_rec_offset.annotations.onset) - new_start_intracranial
 
-        write_set(fname_external_out, TMSi_rec_offset, TMSi_rec_offset_annotations_onset)
-        write_set(fname_lfp_out, lfp_rec_offset, lfp_rec_offset_annotations_onset)
+        if self.dataset_intra.eff_sf is not None:
+            lfp_sf = self.dataset_intra.eff_sf
+        else:
+            lfp_sf = self.dataset_intra.sf
+        
+        lfp_timescale = np.linspace(0, self.dataset_intra.raw_data.get_data().shape[1]/lfp_sf, self.dataset_intra.raw_data.get_data().shape[1])
+
+        write_set(
+            fname_external_out, 
+            TMSi_rec_offset, 
+            TMSi_rec_offset_annotations_onset,
+            TMSi_rec_offset.info['sfreq'],
+            TMSi_rec_offset.times
+            )
+        write_set(
+            fname_lfp_out, 
+            lfp_rec_offset, 
+            lfp_rec_offset_annotations_onset,
+            lfp_sf,
+            lfp_timescale
+            )
 
         QMessageBox.information(self, "Synchronization", "Synchronization done. Both files saved as .SET")
 

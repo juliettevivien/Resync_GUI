@@ -806,7 +806,7 @@ class SyncGUI(QMainWindow):
                     self.dataset_intra.selected_channel_name = channel_name
                     self.dataset_intra.selected_channel_index = channel_names.index(channel_name)  # Get the index of the selected channel
                     self.channel_label_intra.setText(f"Selected Channel: {channel_name}")
-                    self.dataset_intra.max_y_value = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index].max()
+                    self.dataset_intra.max_y_value = np.nanmax(self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index])
                     # Enable the plot button since a channel has been selected
                     self.btn_plot_channel_intra.setEnabled(True)
                     self.btn_artifact_detect_intra.setEnabled(True)    
@@ -1614,20 +1614,29 @@ class SyncGUI(QMainWindow):
 
         # scale y-axis to the same range for both channels by modifying the ylim for the external channel:
         y_max_factor = self.dataset_intra.max_y_value / self.dataset_extra.max_y_value
+        print(self.dataset_intra.max_y_value)
+        print(self.dataset_extra.max_y_value)
+        print(f"y_max_factor: {y_max_factor}")
 
         # Plot the external channel synchronized
         data_extra = self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index]
         data_extra_scaled = data_extra * y_max_factor
+        print(f"Data extra scaled: {data_extra_scaled}")
 
         data_extra_detrended = self.detrend_data(data_extra_scaled)
+        print("Data extra detrended")
         timescale_extra = self.dataset_extra.times
         art_start_0_extra = self.dataset_extra.art_start - 1
+        print(f"Art start 0 extra: {art_start_0_extra}")
         # Find the index in self.dataset_extra.times corresponding to art_start_0
         art_start_index_extra = (timescale_extra >= art_start_0_extra).argmax()
+        print(f"Art start index extra: {art_start_index_extra}")
         offset_data_extra = data_extra_detrended[art_start_index_extra:]
         offset_timescale_extra = timescale_extra[art_start_index_extra:] - art_start_0_extra
         self.dataset_extra.reset_timescale = offset_timescale_extra
+        print(f"Offset timescale extra: {offset_timescale_extra}")
         self.dataset_extra.reset_data = offset_data_extra
+        print(f"Offset data extra: {offset_data_extra}")
         self.ax_synced.scatter(offset_timescale_extra, offset_data_extra, s=8, color='#90EE90', label='External')
 
         # Plot the intracranial channel synchronized

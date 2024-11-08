@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&display=swap" rel="stylesheet">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 
 <body>
@@ -16,11 +17,11 @@
             <img src="images/logo-resync.png" alt="Logo Home" class="logo-resync">
             <h1>Documentation ReSync GUI</h1>
         </div>
-    </header>
-    <main>
         <section>
             <h2 class="title-main-header">Open-source Python GUI for synchronizing intracranial data from DBS electrodes with external data</h2>
         </section>
+    </header>
+    <main>
         <div class="main-widget">
             <div class="main-text">
                 <section id="general-information">
@@ -117,39 +118,90 @@
                                 You can plot the channel to make sure you see the artifacts.
                             </li><br>
                             <li>
-                                Detect the first artifact, either by using the automatic or the manual method.
+                                Detect the first artifact, either by using the automatic or the manual method. See on the <a href=#figure1>figure 1</a> below which sample should be detected as the start of the artifact for a reliable synchronization.
                             </li><br>
+                            <li>
+                                Before saving, you can assess the "timeshift", i.e. you can plot the 
+                                synchronized data together and verify if the last artifact is also aligned. 
+                                Checking the timeshift is an important step to ensure that there was no data loss 
+                                during the recording. 
+                                <ul>
+                                    <li> If the absolute value of the timeshift is higher than 150ms, it might be a good 
+                                        idea to check for packet loss in the intracranial data. </li>
+                                    <li> If the absolute value of the timeshift is smaller than 150ms, but still higher than 10ms 
+                                        (see <a href=#figure2>figure 2</a> for an example), it might be a good idea to adjust the 
+                                        effective sampling frequency of the intracranial data.</li>
+                                    <li> IMPORTANT: do NOT adjust the sampling frequency if the timeshift is >150ms 
+                                        because this is a sign of packet loss, not of inaccurate sampling frequency. 
+                                        You should first look for where the missing packets of data are, replace them by NaNs, 
+                                        then synchronize again and only then you can correct the sampling frequency.</li>
+                                </ul>    
+                            </li>
+                            <li>
+                                To calculate the effective sampling frequency of the intracranial data, you can click on 
+                                "Effective sampling frequency correction". In this window, both the intracranial and the 
+                                external channels are plotted (see <a href=#figure3>figure 3</a> below for an example).
+                                You have to detect manually the first and the last artifact in each channel (see 
+                                <a href=#figure4>figure 4</a> below for an example).
+                                The effective sampling frequency is calculated the number of samples between 
+                                the two artifacts (in the intracranial signal) divided by the time difference between
+                                the last and the first artifact (in the external signal). Once calculated, this "effective"
+                                sampling frequency is automatically applied to the intracranial file. Please reselect the 
+                                first artifact in the intracranial data in the home page to apply the correction before saving.
+                                You can also plot the corrected data in the timeshift analysis window to check if the 
+                                synchronization is correct.                      
+                            </li>
                             <li>
                                 Once the first artifact has been detected in both files, you can choose the fileformat 
                                 in which you want to save the synchronized data (and a folder to save the results).
                             </li><br>
-                            <li>
-                                Optional: before saving, you can assess the "timeshift", i.e. you can plot the 
-                                synchronized data together and verify if the last artifact is also aligned. 
-                                Checking the timeshift is an important step to ensure that there was no data loss 
-                                during the recording. If the timeshift is higher than 250ms, it might be a good 
-                                idea to check for packet loss in the intracranial data. If the timeshift is 
-                                smaller than 250ms, but still higher than 10ms, it might be a good idea to 
-                                adjust the effective sampling frequency of the intracranial data.
-                            </li>
                         </ol>
-                        <img src="images/main-window.png" alt="Screenshot of the GUI" class="gui-screenshot">
-                        <p class="img-legend"><b>Screenshot of the GUI.</b> On the left side is the pannel 
-                            about the intracranial recording, on the right side is the pannel for the external 
-                            recording. In this example, artifacts were selected automatically by ReSync and 
-                            the selection is correct:
-                            <ul class="img-legend">
-                                <li>Intracranial data: the point selected as the start of the artifact should 
-                                    always be the last sample before the amplitude drops (or increases when 
-                                    the polarity of the signal is reversed compared to this example)</li><br>
-                                <li>External data: the point selected as the start of the artifact shoud always
-                                    be the first highest sample after the amplitude changes (or the first lowest 
-                                    sample when the polarity of the signal is reversed compared to this example)
-                                </li>
-                            </ul>
-                        </p>
                     </p>
-                    
+                </section>
+
+                <section id="examples">
+                    <h3>Examples</h3>
+                    <h4 id="figure1">Figure 1: Screenshot of the GUI's Home Page.</h4>
+                    <img src="images/main-window.png" alt="Screenshot of the GUI's Home Page" class="gui-screenshot">
+                    <p class="img-legend">On the left side is the pannel 
+                        about the intracranial recording, on the right side is the pannel for the external 
+                        recording. In this example, artifacts were selected automatically by ReSync and 
+                        the selection is correct:
+                        <ul class="img-legend">
+                            <li>Intracranial data: the point selected as the start of the artifact should 
+                                always be the last sample before the amplitude drops (or increases when 
+                                the polarity of the signal is reversed compared to this example)</li><br>
+                            <li>External data: the point selected as the start of the artifact shoud always
+                                be the first highest sample after the amplitude changes (or the first lowest 
+                                sample when the polarity of the signal is reversed compared to this example)
+                            </li>
+                        </ul>
+                    </p><br>
+                    <h4 id="figure2">Figure 2: Screenshot of the GUI's Timeshift Analysis page.</h4>
+                    <img src="images/timeshift-example.png" alt="Screenshot of the GUI's Timeshift Analysis page" class="gui-screenshot">
+                    <p class="img-legend">
+                        In this example, artifacts were mnually selected in the intracranial and external
+                        recordings. The timeshift is calculated as the difference between the last artifact
+                        in the intracranial data and the last artifact in the external data. In this example,
+                        the timeshift is 36ms, which means that the sampling frequency of the intracranial data 
+                        should be corrected before saving.
+                    </p><br>
+                    <h4 id="figure3">Figure 3: Screenshot of the GUI's Effective Sampling frequency window.</h4>
+                    <img src="images/eff-sf-window.png" alt="Screenshot of the GUI's effective sampling frequency window" class="gui-screenshot">
+                    <p class="img-legend">
+                        On the left side is the pannel about the intracranial recording, on the right 
+                        side is the pannel for the external recording. The signal of both channel is automatically 
+                        plotted as a scatter plot to facilitate manual selection of the first and last artifact in each channel.
+                    </p><br>
+                    <h4 id="figure4">Figure 4: Calculation of the effective sampling frequency of the intracranial signal.</h4>
+                    <img src="images/eff-sf-calculation.png" alt="Screenshot of how to calculate the effective sampling frequency of the intracranial signal" class="gui-screenshot">
+                    <p class="img-legend">
+                        The red crosses show the manual selection of the last artifact in each recording: it should correspond 
+                        to the beginning of the last stimulation pulse in both channels. The first artifacts were also previously
+                        selected. The effective sampling frequency is calculated as the number of samples between the two artifacts
+                        in the intracranial signal divided by the time difference between the last and the first artifact in the external signal.
+                        In this example, the effective sampling frequency is 249.9917165662666Hz.
+                    </p><br>
                 </section>
 
                 <section id="sync-protocol">
@@ -195,6 +247,7 @@
                     <li><a href="#general-information">General Information</a></li>
                     <li><a href="#installation">Installation</a></li>
                     <li><a href="#usage">Usage</a></li>
+                    <li><a href="#examples">Examples</a></li>
                     <li><a href="#sync-protocol">Synchronization Protocol</a></li>
                 </ol>
             </section>
@@ -216,4 +269,38 @@
             </a>
         </div>
     </footer>
+    <script>
+        document.addEventListener("scroll", function () {
+            const header = document.querySelector("header");
+            const menu = document.getElementById("menu");
+            const headerBottom = header.offsetTop + header.offsetHeight;
+
+            if (window.scrollY > headerBottom) {
+                menu.classList.add("menu-centered");
+            } else {
+                menu.classList.remove("menu-centered");
+                menu.style.top = headerBottom + "px"; // Aligns it just below the header
+            }
+        });
+    </script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+        adjustMenuPosition(); // Run on page load
+    });
+
+    document.addEventListener("scroll", adjustMenuPosition); // Run on scroll
+
+    function adjustMenuPosition() {
+        const header = document.querySelector("header");
+        const menu = document.getElementById("menu");
+        const headerBottom = header.offsetTop + header.offsetHeight;
+
+        if (window.scrollY > headerBottom) {
+            menu.classList.add("menu-centered");
+        } else {
+            menu.classList.remove("menu-centered");
+            menu.style.top = headerBottom + "px"; // Align just below the header
+        }
+    }
+    </script>
 </body>

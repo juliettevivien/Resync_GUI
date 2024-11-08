@@ -144,19 +144,33 @@ section {
 }
 
 #menu {
-    position: fixed;
-    top: 50%;
+    position: fixed; /* Keeps it visible during scrolling */
+    top: 100px; /* Adjust this to match the header height */
     right: 0;
-    transform: translateY(-50%);
-    width: 15vw; /* Relative width */
-    max-width: 220px; /* Cap maximum width */
+    width: 15vw;
+    max-width: 220px;
     background-color: rgba(153, 255, 153, 0.25);
     border: 1px solid #ccc;
     box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
     z-index: 1000;
+    transition: top 0.3s ease, transform 0.3s ease; /* Smooth transition */
 }
 
-#installation, #usage, #general-information, #sync-protocol {
+a[href="#figure1"], a[href="#figure2"], a[href="#figure3"], a[href="#figure4"] {
+    text-decoration: underline;
+}
+
+a[href="#figure1"]:hover, a[href="#figure2"]:hover, a[href="#figure3"]:hover, a[href="#figure4"]:hover {
+    text-decoration: none;
+}
+
+/* Center the menu vertically on the right side when past the header */
+.menu-centered {
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+#installation, #usage, #examples, #general-information, #sync-protocol {
     border: 1px solid #ccc;
     background-color: rgba(153, 204, 255, 0.25);
 }
@@ -175,8 +189,7 @@ section {
     }
 
     #menu {
-        width: 30vw; /* Adjust menu size */
-        max-width: 180px;
+        display: none; /* Hide menu on smaller screens */
     }
 
     .logo-img, .logo-resync {

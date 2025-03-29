@@ -2,7 +2,7 @@ import sys
 import matplotlib
 matplotlib.use('Qt5Agg')
 import PyQt5
-from PyQt5.QtWidgets import QLabel, QApplication, QMainWindow, QListWidget, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QInputDialog, QMessageBox, QStackedWidget
+from PyQt5.QtWidgets import QLabel, QLineEdit, QRadioButton, QApplication, QMainWindow, QListWidget, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QInputDialog, QMessageBox, QStackedWidget
 from PyQt5.QtGui import QIcon
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
@@ -100,15 +100,20 @@ class SyncGUI(QMainWindow):
         self.first_page = self.create_first_page()
         self.second_page = self.create_second_page()
         self.third_page = self.create_third_page()
+        self.fourth_page = self.create_fourth_page()
         self.stacked_widget.addWidget(self.first_page)
+        self.stacked_widget.addWidget(self.fourth_page) # ecg cleaning, should be the second page
         self.stacked_widget.addWidget(self.second_page)
         self.stacked_widget.addWidget(self.third_page)
+
 
         # Create the header with navigation buttons
         header_layout = QHBoxLayout()
         self.menu_label = QLabel("MENU")
         self.btn_first = Button("Home Page","#cd9ddc")
         self.btn_first.clicked.connect(self.show_first_page)
+        self.btn_fourth = Button("ECG Cleaning", "#cd9ddc")
+        self.btn_fourth.clicked.connect(self.show_fourth_page)
         self.btn_second = Button("Effective Sampling Frequency correction", "#cd9ddc")
         self.btn_second.clicked.connect(self.show_second_page)
         self.btn_third = Button("Timeshift Analysis", "#cd9ddc")
@@ -119,6 +124,7 @@ class SyncGUI(QMainWindow):
         # Add buttons to the header layout
         header_layout.addWidget(self.menu_label)
         header_layout.addWidget(self.btn_first)
+        header_layout.addWidget(self.btn_fourth)
         header_layout.addWidget(self.btn_second)
         header_layout.addWidget(self.btn_third)
         header_layout.addWidget(self.btn_help)
@@ -372,13 +378,428 @@ class SyncGUI(QMainWindow):
         return third_page_widget
 
 
+    def create_fourth_page(self):
+        # Main vertical layout for the first page
+        layout_fourth_page = QHBoxLayout()
+
+        # Vertical layout on the left for the plotting and for the visualization of the cleaned data
+        layout_left_fourth_page = QVBoxLayout()
+
+        layout_channel_selection_cleaning = QHBoxLayout()
+        # Create a button to choose a channel for cleaning
+        self.btn_choose_channel = Button("Choose channel for cleaning", "lightyellow")
+        self.btn_choose_channel.clicked.connect(self.choose_channel_for_cleaning)
+        self.btn_choose_channel.setEnabled(False) # Should be enabled only when the file is loaded
+
+        # add a label to show the selected channel name
+        self.label_selected_channel = QLabel("No channel selected")
+
+        layout_channel_selection_cleaning.addWidget(self.btn_choose_channel)
+        layout_channel_selection_cleaning.addWidget(self.label_selected_channel)
+
+        # Create a button to start the ECG cleaning process
+        self.btn_start_ecg_cleaning = Button("Start ECG cleaning", "lightyellow")
+        self.btn_start_ecg_cleaning.clicked.connect(self.start_ecg_cleaning)
+        self.btn_start_ecg_cleaning.setEnabled(False) # Should be enabled only when the file is loaded
+
+        # add a matplotlib canvas to visualize the raw data
+        self.figure_ecg, self.ax_ecg = plt.subplots()
+        self.canvas_ecg = FigureCanvas(self.figure_ecg)
+        #self.canvas_ecg.setEnabled(False)  # Initially hidden
+
+        # Set up the interactive toolbar to plot the signal
+        self.toolbar_ecg = NavigationToolbar(self.canvas_ecg, self)
+        self.toolbar_ecg.setEnabled(False)
+
+        # create a vertical layout below the plot to enter start and end times for the cleaning
+        layout_start_end_time = QHBoxLayout()
+        self.label_start_time = QLabel("Start time for cleaning (s):")
+        self.box_start_time = QLineEdit()
+        self.box_start_time.setPlaceholderText("0")  # Set a placeholder text
+        self.box_start_time.setEnabled(False)  # Initially disabled
+        self.label_end_time = QLabel("End time for cleaning (s):")
+        self.box_end_time = QLineEdit()
+        self.box_end_time.setPlaceholderText("0")  # Set a placeholder text
+        self.box_end_time.setEnabled(False)  # Initially disabled
+        self.label_artifact_polarity = QLabel("Artifact polarity:")
+        # add 2 radio buttons to select the artifact polarity:
+        self.radio_button_up = QRadioButton("Up")
+        self.radio_button_down = QRadioButton("Down")
+        self.radio_button_up.setChecked(True)  # Set the default selection to "Up"
+        self.radio_button_down.setChecked(False)  # Set the default selection to "Down"
+        self.btn_validate_start_end_time = Button("Validate", "lightyellow")
+        self.btn_validate_start_end_time.clicked.connect(self.validate_start_end_time)
+        self.btn_validate_start_end_time.setEnabled(False)  # Initially disabled
+
+        layout_start_end_time.addWidget(self.label_start_time)
+        layout_start_end_time.addWidget(self.box_start_time)
+        layout_start_end_time.addWidget(self.label_end_time)
+        layout_start_end_time.addWidget(self.box_end_time)
+        layout_start_end_time.addWidget(self.label_artifact_polarity)
+        layout_start_end_time.addWidget(self.radio_button_up)
+        layout_start_end_time.addWidget(self.radio_button_down)
+        layout_start_end_time.addWidget(self.btn_validate_start_end_time)
+
+        # Create a button to plot the overlap raw and clean signal for inspection
+        self.btn_plot_ecg_clean = Button("Plot overlap raw and clean signal for inspection", "lightyellow")
+        #self.btn_plot_ecg_clean.clicked.connect(self.plot_ecg_clean)
+        self.btn_plot_ecg_clean.setEnabled(False) # Should be enabled only when self.dataset_intra.ecg is not None
+
+        # add another matplotlib canvas to visualize the cleaned data
+        self.figure_ecg_clean, self.ax_ecg_clean = plt.subplots()
+        self.canvas_ecg_clean = FigureCanvas(self.figure_ecg_clean)
+        #self.canvas_ecg_clean.setEnabled(False)  # Initially hidden
+
+        # Set up the interactive toolbar to plot the cleaned signal
+        self.toolbar_ecg_clean = NavigationToolbar(self.canvas_ecg_clean, self)
+        self.toolbar_ecg_clean.setEnabled(False)
+
+        layout_left_fourth_page.addLayout(layout_channel_selection_cleaning)
+        layout_left_fourth_page.addWidget(self.toolbar_ecg)
+        layout_left_fourth_page.addWidget(self.canvas_ecg)  # Add the canvas to the layout
+        layout_left_fourth_page.addLayout(layout_start_end_time)
+        layout_left_fourth_page.addWidget(self.btn_start_ecg_cleaning)
+        layout_left_fourth_page.addWidget(self.toolbar_ecg_clean)  # Add the toolbar to the layout
+        layout_left_fourth_page.addWidget(self.canvas_ecg_clean)  # Add the canvas to the layout
+
+        layout_right_fourth_page = QVBoxLayout()
+
+        # Create a Header for the right panel
+        self.label_ecg_artifact = QLabel("Verification tools")
+        self.label_ecg_artifact.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
+        self.label_ecg_artifact.setStyleSheet("font-weight: bold; font-size: 18px;")
+
+        # Create a button to show the detected peaks
+        self.btn_show_detected_peaks = Button("Show detected peaks", "lightyellow")
+        #self.btn_show_detected_peaks.clicked.connect(self.show_detected_peaks)
+        self.btn_show_detected_peaks.setEnabled(False) # Should be enabled only when self.dataset_intra.ecg is not None
+
+        # Add a canvas to visualize the detected peaks
+        self.figure_detected_peaks, self.ax_detected_peaks = plt.subplots()
+        self.canvas_detected_peaks = FigureCanvas(self.figure_detected_peaks)
+        #self.canvas_detected_peaks.setEnabled(False)  # Initially hidden
+
+        # Add a toolbar to visualize the detected peaks
+        self.toolbar_detected_peaks = NavigationToolbar(self.canvas_detected_peaks, self)
+        self.toolbar_detected_peaks.setEnabled(False)
+
+        # Create a button to plot the ECG artifact detected after cleaning
+        self.btn_plot_ecg_artifact = Button("Plot ECG artifact detected after cleaning", "lightyellow")
+        #self.btn_plot_ecg_artifact.clicked.connect(self.plot_ecg_artifact)
+        self.btn_plot_ecg_artifact.setEnabled(False) # Should be enabled only when self.dataset_intra.ecg is not None
+
+        # add a matplotlib canvas to visualize the ECG artifact detected
+        self.figure_ecg_artifact, self.ax_ecg_artifact = plt.subplots()
+        self.canvas_ecg_artifact = FigureCanvas(self.figure_ecg_artifact)
+
+        # Create a button to confirm the cleaning and continue with the synchronization
+        self.btn_confirm_cleaning = Button("Confirm cleaning and use cleaned channel for synchronization", "lightyellow")
+        self.btn_confirm_cleaning.clicked.connect(self.confirm_cleaning)
+        self.btn_confirm_cleaning.setEnabled(False) # Should be enabled only when self.dataset_intra.ecg is not None
+
+        layout_right_fourth_page.addWidget(self.label_ecg_artifact)
+        layout_right_fourth_page.addWidget(self.toolbar_detected_peaks)  # Add the toolbar to the layout
+        layout_right_fourth_page.addWidget(self.canvas_detected_peaks)  # Add the canvas to the layout
+        layout_right_fourth_page.addWidget(self.canvas_ecg_artifact)  # Add the canvas to the layout
+        layout_right_fourth_page.addWidget(self.btn_confirm_cleaning)
+
+        # Left panel for intracranial file
+        #self.panel_intra_ecg = self.create_panel_intra_ecg()
+        #panel_layout.addLayout(self.panel_intra_ecg)
+
+        # Add the horizontal panel layout to the main layout
+        layout_fourth_page.addLayout(layout_left_fourth_page)
+        layout_fourth_page.addLayout(layout_right_fourth_page)
+
+        # Create the first page widget and set the layout
+        fourth_page_widget = QWidget()
+        fourth_page_widget.setLayout(layout_fourth_page)
+        return fourth_page_widget
+
+    def confirm_cleaning(self):
+        if self.dataset_intra.selected_channel_index_ecg == 0:
+            # Replace the corresponding channel's data
+            self.dataset_intra.raw_data._data[0,:] = self.dataset_intra.cleaned_ecg_left
+            #self.dataset_intra.raw_data.get_data()[0] = self.dataset_intra.cleaned_ecg_left
+            print("Cleaning confirmed. Replacing raw data with cleaned data in the left channel.")
+        elif self.dataset_intra.selected_channel_index_ecg == 1:
+            # Replace the corresponding channel's data
+            self.dataset_intra.raw_data._data[1,:] = self.dataset_intra.cleaned_ecg_right
+            #self.dataset_intra.raw_data.get_data()[1] = self.dataset_intra.cleaned_ecg_right
+            print("Cleaning confirmed. Replacing raw data with cleaned data in the right channel.")
+        """
+        if self.dataset_intra.cleaned_ecg_left is not None and self.dataset_intra.selected_channel_index_ecg == 0:
+            print("replacing left channel with cleaned data")
+        elif self.dataset_intra.cleaned_ecg_right is not None and self.dataset_intra.selected_channel_index_ecg == 1:
+            print("replacing right channel with cleaned data")
+        """
+
+
+    def start_ecg_cleaning(self):
+        """Start the ECG cleaning process."""
+        if self.dataset_intra.raw_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
+            # Perform the ECG cleaning process here
+            try:
+                self.clean_ecg()
+                """
+                if self.dataset_intra.selected_channel_index_ecg == 0:
+                # Assuming you have a method to clean the ECG data
+                    self.clean_ecg(self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index_ecg])
+                    
+                elif self.dataset_intra.selected_channel_index_ecg == 1:
+                    self.clean_ecg(self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index_ecg])    
+                """
+
+                self.btn_plot_ecg_clean.setEnabled(True)  # Enable the button after cleaning
+                self.btn_show_detected_peaks.setEnabled(True)  # Enable the button after cleaning
+                self.btn_plot_ecg_artifact.setEnabled(True)  # Enable the button after cleaning
+
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
+
+
+    def clean_ecg(self):
+        full_data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
+        times = self.dataset_intra.raw_data.times
+        start_rec = self.dataset_intra.start_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.start_time_right
+        end_rec = self.dataset_intra.end_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.end_time_right
+        sf_lfp= round(self.dataset_intra.raw_data.info['sfreq'])
+        if self.dataset_intra.artifact_polarity == "down":
+            REVERSED = True # true if cardiac artifacts are going downwards
+        else:
+            REVERSED = False
+
+        # crop data to remove sync pulses (amplitude is too big, it messes with template detection)
+        data_crop = full_data[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
+        # keep beginning and end:
+        beginning_part = full_data[:int(start_rec*sf_lfp)]
+        end_part = full_data[int(end_rec*sf_lfp):]
+
+        times_crop = times[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
+        
+        if REVERSED:
+            cropped_data = - data_crop
+            full_data = - full_data
+        else:
+            cropped_data = data_crop
+            full_data = full_data
+
+        ecg = {'proc': {}, 'stats': {}, 'cleandata': None, 'detected': False}
+        ns = len(cropped_data)
+        
+        # Segment the signal into overlapping windows
+        dwindow = int(round(sf_lfp))  # 1s window
+        dmove = sf_lfp  # 1s step
+        n_segments = (ns - dwindow) // dmove + 1
+        
+        x = np.array([cropped_data[i * dmove: i * dmove + dwindow] for i in range(n_segments) if i * dmove + dwindow <= ns])
+        
+        detected_peaks = []  # Store peak indices in the original timescale
+        
+        # Loop through each segment and find peaks
+        for i in range(n_segments):
+            segment = x[i]
+            peaks, _ = scipy.signal.find_peaks(segment, height=np.percentile(segment, 90), distance=sf_lfp//2)  # Adjust threshold & min distance
+            real_peaks = peaks + (i * dmove)  # Convert to original timescale
+            detected_peaks.extend(real_peaks)
+
+        detected_peaks = np.array(detected_peaks)
+        
+        # Define epoch window (-0.5s to +0.5s)
+        pre_samples = int(0.5 * sf_lfp)
+        post_samples = int(0.5 * sf_lfp)
+        epoch_length = pre_samples + post_samples  # Total length of each epoch
+
+        epochs = []  # Store extracted heartbeats
+
+        for peak in detected_peaks:
+            start = peak - pre_samples
+            end = peak + post_samples
+            
+            if start >= 0 and end < ns:  # Ensure we don't go out of bounds
+                epochs.append(cropped_data[start:end])
+
+        epochs = np.array(epochs)
+
+        # Compute average heartbeat template
+        mean_epoch = np.mean(epochs, axis=0)
+        ecg['proc']['template1'] = mean_epoch  # First ECG template
+
+        # Plot the detected ECG epochs
+        time = np.linspace(-0.5, 0.5, epoch_length)  # Time in seconds
+
+        self.canvas_ecg_artifact.setEnabled(True)
+        #self.toolbar_ecg_artifact.setEnabled(True)
+        self.ax_ecg_artifact.clear()
+        self.ax_ecg_artifact.set_title("Detected ECG epochs")
+
+        for epoch in epochs:
+            if REVERSED:
+                epoch = -epoch
+            self.ax_ecg_artifact.plot(time, epoch, color='gray', alpha=0.3)
+        
+        if REVERSED:
+            mean_epoch = - mean_epoch
+
+        self.ax_ecg_artifact.plot(time, mean_epoch, color='red', linewidth=2, label='Average ECG Template')
+        self.ax_ecg_artifact.set_xlabel("Time (s)")
+        self.ax_ecg_artifact.set_ylabel("Amplitude")
+        self.ax_ecg_artifact.legend()
+        self.canvas_ecg_artifact.draw()
+
+
+        # Temporal correlation for ECG detection
+        r = np.correlate(cropped_data, ecg['proc']['template1'], mode='same')
+        threshold = np.percentile(r, 95)
+        detected_peaks, _ = scipy.signal.find_peaks(r, height=threshold)
+
+        if len(detected_peaks) < 5:
+            return ecg  # Not enough peaks detected
+
+        ecg['proc']['r'] = r
+        ecg['proc']['thresh'] = threshold
+
+        # Second pass for refining detection
+        refined_template = np.mean([cropped_data[p - dwindow//2 : p + dwindow//2] for p in detected_peaks if p - dwindow//2 > 0 and p + dwindow//2 < ns], axis=0)
+        ecg['proc']['template2'] = refined_template
+        r2 = np.correlate(cropped_data, refined_template, mode='same')
+        threshold2 = np.percentile(r2, 98)
+        final_peaks, _ = scipy.signal.find_peaks(r2, height=threshold2)
+
+        ecg['proc']['r2'] = r2
+        ecg['proc']['thresh2'] = threshold2
+
+        # Estimate HR
+        peak_intervals = np.diff(final_peaks) / sf_lfp  # Convert to seconds
+        hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
+        ecg['stats']['hr'] = hr
+        ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
+
+        # Check ECG detection validity
+        if 55 <= hr <= 120 and len(final_peaks) > 10:
+            ecg['detected'] = True
+
+        # Remove artifacts (simple interpolation)
+        clean_data = np.copy(cropped_data)
+        for p in final_peaks:
+            clean_data[max(0, p - 5): min(ns, p + 5)] = np.nan  # NaN out artifacts
+        clean_data = np.interp(np.arange(ns), np.arange(ns)[~np.isnan(clean_data)], clean_data[~np.isnan(clean_data)])
+
+        if REVERSED:
+            full_data = - full_data
+            clean_data = - clean_data
+
+        clean_data_full = np.concatenate([beginning_part, clean_data, end_part])
+        ecg['cleandata'] = clean_data_full
+
+        if self.dataset_intra.selected_channel_index_ecg == 0:
+            self.dataset_intra.cleaned_ecg_left = clean_data_full
+            self.dataset_intra.detected_peaks_left = final_peaks
+            self.dataset_intra.mean_epoch_left = mean_epoch
+            self.dataset_intra.epochs_left = epochs
+            print("Left channel cleaned")
+
+        elif self.dataset_intra.selected_channel_index_ecg == 1:
+            self.dataset_intra.cleaned_ecg_right = clean_data_full
+            self.dataset_intra.detected_peaks_right = final_peaks
+            self.dataset_intra.mean_epoch_right = mean_epoch
+            self.dataset_intra.epochs_right = epochs
+            print("Right channel cleaned")
+
+        # plot the detected peaks
+        self.canvas_detected_peaks.setEnabled(True)
+        self.toolbar_detected_peaks.setEnabled(True)
+        self.ax_detected_peaks.clear()
+        self.ax_detected_peaks.set_title('Detected Peaks')
+        self.ax_detected_peaks.plot(cropped_data, label='Raw ECG')
+        self.ax_detected_peaks.plot(final_peaks, cropped_data[final_peaks], 'ro', label='Detected Peaks')
+        self.canvas_detected_peaks.draw()
+    
+        #plot an overlap of the raw and cleaned data
+        self.canvas_ecg_clean.setEnabled(True)
+        self.toolbar_ecg_clean.setEnabled(True)
+        self.ax_ecg_clean.clear()
+        self.ax_ecg_clean.set_title("Cleaned ECG Signal")
+        self.ax_ecg_clean.plot(full_data, label='Raw data')
+        self.ax_ecg_clean.plot(clean_data_full, label='Cleaned data')
+        self.ax_ecg_clean.set_xlabel("Time (s)")
+        self.ax_ecg_clean.set_ylabel("Amplitude")
+        self.ax_ecg_clean.legend()
+        self.canvas_ecg_clean.draw()
+
+        self.btn_confirm_cleaning.setEnabled(True)  # Enable the button after cleaning
+
+
+    def validate_start_end_time(self):
+        """Validate the start and end times for cleaning."""
+        try:
+            start_time = int(self.box_start_time.text())
+            end_time = int(self.box_end_time.text())
+
+            if start_time < 0 or end_time < 0:
+                raise ValueError("Start and end times must be positive.")
+
+            if start_time >= end_time:
+                raise ValueError("Start time must be less than end time.")
+
+            if self.dataset_intra.selected_channel_index_ecg == 0:
+                self.dataset_intra.start_time_left = start_time
+                self.dataset_intra.end_time_left = end_time
+            elif self.dataset_intra.selected_channel_index_ecg == 1:
+                self.dataset_intra.start_time_right = start_time
+                self.dataset_intra.end_time_right = end_time
+
+            self.label_start_time.setText(f"Start time: {start_time} s")
+            self.label_end_time.setText(f"End time: {end_time} s")
+            self.btn_start_ecg_cleaning.setEnabled(True)  # Enable the button after validation
+
+            if self.radio_button_down.isChecked():
+                self.dataset_intra.artifact_polarity = "down"
+            elif self.radio_button_up.isChecked():
+                self.dataset_intra.artifact_polarity = "up"
+
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid Input, please enter an integer", str(e))
+
+
+    def choose_channel_for_cleaning(self):
+        """Prompt for channel name selection for intracranial file."""
+        if self.dataset_intra.raw_data:
+            try:
+                channel_names = self.dataset_intra.ch_names  # List of channel names
+                channel_name, ok = QInputDialog.getItem(self, "Channel Selection", "Select a channel:", channel_names, 0, False)
+
+                if ok and channel_name:  # Check if a channel was selected
+                    self.dataset_intra.selected_channel_name_ecg = channel_name
+                    self.dataset_intra.selected_channel_index_ecg = channel_names.index(channel_name)  # Get the index of the selected channel
+                    self.label_selected_channel.setText(f"Selected Channel: {channel_name}")                    
+
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to select channel: {e}")
+
+        """Plot the selected channel data from the intracranial file."""
+        if self.dataset_intra.raw_data and self.dataset_intra.selected_channel_index_ecg is not None:
+            self.canvas_ecg.setEnabled(True)
+            self.toolbar_ecg.setEnabled(True)
+            self.ax_ecg.clear()
+            channel_data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
+            times = self.dataset_intra.times
+            self.ax_ecg.plot(times, channel_data)
+            self.ax_ecg.set_title(f"Channel {self.dataset_intra.selected_channel_index_ecg} data - {self.dataset_intra.selected_channel_name_ecg}")
+            self.ax_ecg.set_xlabel("Time (s)")
+            self.ax_ecg.set_ylabel("Amplitude")
+            self.canvas_ecg.draw()
+            self.box_start_time.setEnabled(True)
+            self.box_end_time.setEnabled(True)
+            self.btn_validate_start_end_time.setEnabled(True)
+
 
     def show_first_page(self):
         self.stacked_widget.setCurrentIndex(0)
         self.update_button_styles(self.btn_first)
 
     def show_second_page(self):
-        self.stacked_widget.setCurrentIndex(1)
+        self.stacked_widget.setCurrentIndex(2)
         self.update_button_styles(self.btn_second)
         if self.dataset_intra.selected_channel_index is not None:
             self.plot_scatter_channel_intra_sf()
@@ -390,9 +811,14 @@ class SyncGUI(QMainWindow):
             self.button_select_last_extra.setEnabled(True)        
 
     def show_third_page(self):
-        self.stacked_widget.setCurrentIndex(2)
+        self.stacked_widget.setCurrentIndex(3)
         self.update_button_styles(self.btn_third)
         self.update_plot_sync_channels_state()
+
+    def show_fourth_page(self):
+        self.stacked_widget.setCurrentIndex(1)
+        self.update_button_styles(self.btn_fourth)
+
 
     def show_help(self):
         # Path to the HTML file stored in the GUI folder
@@ -781,7 +1207,6 @@ class SyncGUI(QMainWindow):
                 raw_data = read_raw_fieldtrip(file_name, info={}, data_name="data")
                 self.dataset_intra.raw_data = raw_data  # Assign to dataset
                 self.dataset_intra.sf = raw_data.info["sfreq"]  # Assign sampling frequency
-                print(f"Sampling frequency of the intracranial recording: {self.dataset_intra.sf}")
                 self.dataset_intra.ch_names = raw_data.ch_names  # Assign channel names#
                 self.dataset_intra.times = np.linspace(0, raw_data.get_data().shape[1]/self.dataset_intra.sf, raw_data.get_data().shape[1])
                 self.file_label_intra.setText(f"Selected File: {basename(file_name)}")
@@ -791,6 +1216,8 @@ class SyncGUI(QMainWindow):
                 # Show channel selection and plot buttons for intracranial
                 self.btn_select_channel_intra.setEnabled(True)
                 self.channel_label_intra.setEnabled(True)
+                self.btn_choose_channel.setEnabled(True)
+                
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load .mat file: {e}")
 
@@ -1822,7 +2249,7 @@ class SyncGUI(QMainWindow):
 
     def update_button_styles(self, active_button):
         # Set custom property to determine which button is active
-        buttons = [self.btn_first, self.btn_second, self.btn_third]
+        buttons = [self.btn_first, self.btn_second, self.btn_third, self.btn_fourth]
         for button in buttons:
             button.setProperty("active", button == active_button)
             button.style().unpolish(button)

@@ -2,7 +2,7 @@ import sys
 import matplotlib
 matplotlib.use('Qt5Agg')
 import PyQt5
-from PyQt5.QtWidgets import QLabel, QLineEdit, QRadioButton, QApplication, QMainWindow, QListWidget, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QInputDialog, QMessageBox, QStackedWidget
+from PyQt5.QtWidgets import QLabel, QLineEdit, QRadioButton, QComboBox, QApplication, QMainWindow, QListWidget, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QInputDialog, QMessageBox, QStackedWidget
 from PyQt5.QtGui import QIcon
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
@@ -427,6 +427,10 @@ class SyncGUI(QMainWindow):
         self.radio_button_down = QRadioButton("Down")
         self.radio_button_up.setChecked(True)  # Set the default selection to "Up"
         self.radio_button_down.setChecked(False)  # Set the default selection to "Down"
+        self.label_thresh_ecg = QLabel("Threshold:")
+        self.box_thresh_ecg = QComboBox()
+        self.box_thresh_ecg.addItems(['95', '96', '97', '98', '99'])
+        self.box_thresh_ecg.setEnabled(False)
         self.btn_validate_start_end_time = Button("Validate", "lightyellow")
         self.btn_validate_start_end_time.clicked.connect(self.validate_start_end_time)
         self.btn_validate_start_end_time.setEnabled(False)  # Initially disabled
@@ -438,6 +442,8 @@ class SyncGUI(QMainWindow):
         layout_start_end_time.addWidget(self.label_artifact_polarity)
         layout_start_end_time.addWidget(self.radio_button_up)
         layout_start_end_time.addWidget(self.radio_button_down)
+        layout_start_end_time.addWidget(self.label_thresh_ecg)
+        layout_start_end_time.addWidget(self.box_thresh_ecg)
         layout_start_end_time.addWidget(self.btn_validate_start_end_time)
 
         # Create a button to plot the overlap raw and clean signal for inspection
@@ -663,7 +669,7 @@ class SyncGUI(QMainWindow):
         refined_template = np.mean([cropped_data[p - dwindow//2 : p + dwindow//2] for p in detected_peaks if p - dwindow//2 > 0 and p + dwindow//2 < ns], axis=0)
         ecg['proc']['template2'] = refined_template
         r2 = np.correlate(cropped_data, refined_template, mode='same')
-        threshold2 = np.percentile(r2, 98)
+        threshold2 = np.percentile(r2, self.dataset_intra.ecg_tresh)
         final_peaks, _ = scipy.signal.find_peaks(r2, height=threshold2)
 
         ecg['proc']['r2'] = r2
@@ -749,6 +755,7 @@ class SyncGUI(QMainWindow):
                 self.dataset_intra.start_time_right = start_time
                 self.dataset_intra.end_time_right = end_time
 
+            self.dataset_intra.ecg_tresh = int(self.box_thresh_ecg.currentText())
             self.label_start_time.setText(f"Start time: {start_time} s")
             self.label_end_time.setText(f"End time: {end_time} s")
             self.btn_start_ecg_cleaning.setEnabled(True)  # Enable the button after validation
@@ -791,6 +798,7 @@ class SyncGUI(QMainWindow):
             self.canvas_ecg.draw()
             self.box_start_time.setEnabled(True)
             self.box_end_time.setEnabled(True)
+            self.box_thresh_ecg.setEnabled(True)
             self.btn_validate_start_end_time.setEnabled(True)
 
 

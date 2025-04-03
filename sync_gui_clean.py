@@ -435,6 +435,11 @@ class SyncGUI(QMainWindow):
         self.btn_validate_start_end_time.clicked.connect(self.validate_start_end_time)
         self.btn_validate_start_end_time.setEnabled(False)  # Initially disabled
 
+        # add a label to indicate filtering option:
+        self.label_filtering_option = QLabel("Low-pass filter: (better if StimOn)")
+        self.box_filtering_option = QLineEdit()
+        self.box_filtering_option.setEnabled(False)  # Initially disabled
+
         layout_start_end_time.addWidget(self.label_start_time)
         layout_start_end_time.addWidget(self.box_start_time)
         layout_start_end_time.addWidget(self.label_end_time)
@@ -444,6 +449,8 @@ class SyncGUI(QMainWindow):
         layout_start_end_time.addWidget(self.radio_button_down)
         layout_start_end_time.addWidget(self.label_thresh_ecg)
         layout_start_end_time.addWidget(self.box_thresh_ecg)
+        layout_start_end_time.addWidget(self.label_filtering_option)
+        layout_start_end_time.addWidget(self.box_filtering_option)
         layout_start_end_time.addWidget(self.btn_validate_start_end_time)
 
         # Create a button to plot the overlap raw and clean signal for inspection
@@ -670,7 +677,7 @@ class SyncGUI(QMainWindow):
         ecg['proc']['template2'] = refined_template
         r2 = np.correlate(cropped_data, refined_template, mode='same')
         threshold2 = np.percentile(r2, self.dataset_intra.ecg_tresh)
-        final_peaks, _ = scipy.signal.find_peaks(r2, height=threshold2)
+        final_peaks, _ = scipy.signal.find_peaks(r2, height=threshold2, distance=sf_lfp//2)
 
         ecg['proc']['r2'] = r2
         ecg['proc']['thresh2'] = threshold2
@@ -726,8 +733,8 @@ class SyncGUI(QMainWindow):
         self.toolbar_ecg_clean.setEnabled(True)
         self.ax_ecg_clean.clear()
         self.ax_ecg_clean.set_title("Cleaned ECG Signal")
-        self.ax_ecg_clean.plot(full_data, label='Raw data')
-        self.ax_ecg_clean.plot(clean_data_full, label='Cleaned data')
+        self.ax_ecg_clean.plot(times,full_data, label='Raw data')
+        self.ax_ecg_clean.plot(times,clean_data_full, label='Cleaned data')
         self.ax_ecg_clean.set_xlabel("Time (s)")
         self.ax_ecg_clean.set_ylabel("Amplitude")
         self.ax_ecg_clean.legend()
@@ -765,6 +772,10 @@ class SyncGUI(QMainWindow):
             elif self.radio_button_up.isChecked():
                 self.dataset_intra.artifact_polarity = "up"
 
+            if self.box_filtering_option.text() != "":
+                h_freq = int(self.box_filtering_option.text())
+                self.dataset_intra.raw_data = self.dataset_intra.raw_data.copy().filter(l_freq=0, h_freq=h_freq, picks=[self.dataset_intra.raw_data.ch_names[0], self.dataset_intra.raw_data.ch_names[1]])
+
         except ValueError as e:
             QMessageBox.warning(self, "Invalid Input, please enter an integer", str(e))
 
@@ -779,7 +790,7 @@ class SyncGUI(QMainWindow):
                 if ok and channel_name:  # Check if a channel was selected
                     self.dataset_intra.selected_channel_name_ecg = channel_name
                     self.dataset_intra.selected_channel_index_ecg = channel_names.index(channel_name)  # Get the index of the selected channel
-                    self.label_selected_channel.setText(f"Selected Channel: {channel_name}")                    
+                    self.label_selected_channel.setText(f"Selected Channel: {channel_name}")                
 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to select channel: {e}")
@@ -800,6 +811,7 @@ class SyncGUI(QMainWindow):
             self.box_end_time.setEnabled(True)
             self.box_thresh_ecg.setEnabled(True)
             self.btn_validate_start_end_time.setEnabled(True)
+            self.box_filtering_option.setEnabled(True)
 
 
     def show_first_page(self):

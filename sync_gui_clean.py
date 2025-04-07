@@ -640,7 +640,7 @@ class SyncGUI(QMainWindow):
 
         # Plot the detected ECG epochs
         time = np.linspace(-0.5, 0.5, epoch_length)  # Time in seconds
-
+    
         self.canvas_ecg_artifact.setEnabled(True)
         #self.toolbar_ecg_artifact.setEnabled(True)
         self.ax_ecg_artifact.clear()

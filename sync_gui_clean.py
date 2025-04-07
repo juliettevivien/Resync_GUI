@@ -381,7 +381,7 @@ class SyncGUI(QMainWindow):
     def create_fourth_page(self):
         # Main vertical layout for the first page
         layout_fourth_page = QHBoxLayout()
-
+        
         # Vertical layout on the left for the plotting and for the visualization of the cleaned data
         layout_left_fourth_page = QVBoxLayout()
 
@@ -397,10 +397,18 @@ class SyncGUI(QMainWindow):
         layout_channel_selection_cleaning.addWidget(self.btn_choose_channel)
         layout_channel_selection_cleaning.addWidget(self.label_selected_channel)
 
+        layout_cleaning_method = QHBoxLayout()
         # Create a button to start the ECG cleaning process
-        self.btn_start_ecg_cleaning = Button("Start ECG cleaning", "lightyellow")
-        self.btn_start_ecg_cleaning.clicked.connect(self.start_ecg_cleaning)
+        self.btn_start_ecg_cleaning = Button("Start ECG cleaning: interpolation method", "lightyellow")
+        self.btn_start_ecg_cleaning.clicked.connect(self.start_ecg_cleaning_interpolation)
         self.btn_start_ecg_cleaning.setEnabled(False) # Should be enabled only when the file is loaded
+
+        self.btn_start_ecg_cleaning_template_sub = Button("Start ECG cleaning: template substraction method", "lightyellow")
+        self.btn_start_ecg_cleaning_template_sub.clicked.connect(self.start_ecg_cleaning_template_sub)
+        self.btn_start_ecg_cleaning_template_sub.setEnabled(False)
+
+        layout_cleaning_method.addWidget(self.btn_start_ecg_cleaning)
+        layout_cleaning_method.addWidget(self.btn_start_ecg_cleaning_template_sub)
 
         # add a matplotlib canvas to visualize the raw data
         self.figure_ecg, self.ax_ecg = plt.subplots()
@@ -453,10 +461,6 @@ class SyncGUI(QMainWindow):
         layout_start_end_time.addWidget(self.box_filtering_option)
         layout_start_end_time.addWidget(self.btn_validate_start_end_time)
 
-        # Create a button to plot the overlap raw and clean signal for inspection
-        self.btn_plot_ecg_clean = Button("Plot overlap raw and clean signal for inspection", "lightyellow")
-        #self.btn_plot_ecg_clean.clicked.connect(self.plot_ecg_clean)
-        self.btn_plot_ecg_clean.setEnabled(False) # Should be enabled only when self.dataset_intra.ecg is not None
 
         # add another matplotlib canvas to visualize the cleaned data
         self.figure_ecg_clean, self.ax_ecg_clean = plt.subplots()
@@ -471,7 +475,7 @@ class SyncGUI(QMainWindow):
         layout_left_fourth_page.addWidget(self.toolbar_ecg)
         layout_left_fourth_page.addWidget(self.canvas_ecg)  # Add the canvas to the layout
         layout_left_fourth_page.addLayout(layout_start_end_time)
-        layout_left_fourth_page.addWidget(self.btn_start_ecg_cleaning)
+        layout_left_fourth_page.addLayout(layout_cleaning_method)
         layout_left_fourth_page.addWidget(self.toolbar_ecg_clean)  # Add the toolbar to the layout
         layout_left_fourth_page.addWidget(self.canvas_ecg_clean)  # Add the canvas to the layout
 
@@ -504,6 +508,7 @@ class SyncGUI(QMainWindow):
         # add a matplotlib canvas to visualize the ECG artifact detected
         self.figure_ecg_artifact, self.ax_ecg_artifact = plt.subplots()
         self.canvas_ecg_artifact = FigureCanvas(self.figure_ecg_artifact)
+        self.toolbar_ecg_artifact = NavigationToolbar(self.canvas_ecg_artifact, self)
 
         # Create a button to confirm the cleaning and continue with the synchronization
         self.btn_confirm_cleaning = Button("Confirm cleaning and use cleaned channel for synchronization", "lightyellow")
@@ -513,20 +518,18 @@ class SyncGUI(QMainWindow):
         layout_right_fourth_page.addWidget(self.label_ecg_artifact)
         layout_right_fourth_page.addWidget(self.toolbar_detected_peaks)  # Add the toolbar to the layout
         layout_right_fourth_page.addWidget(self.canvas_detected_peaks)  # Add the canvas to the layout
+        layout_right_fourth_page.addWidget(self.toolbar_ecg_artifact)
         layout_right_fourth_page.addWidget(self.canvas_ecg_artifact)  # Add the canvas to the layout
         layout_right_fourth_page.addWidget(self.btn_confirm_cleaning)
 
-        # Left panel for intracranial file
-        #self.panel_intra_ecg = self.create_panel_intra_ecg()
-        #panel_layout.addLayout(self.panel_intra_ecg)
-
         # Add the horizontal panel layout to the main layout
-        layout_fourth_page.addLayout(layout_left_fourth_page)
-        layout_fourth_page.addLayout(layout_right_fourth_page)
+        layout_fourth_page.addLayout(layout_left_fourth_page, stretch=1)
+        layout_fourth_page.addLayout(layout_right_fourth_page, stretch=1)
 
         # Create the first page widget and set the layout
         fourth_page_widget = QWidget()
         fourth_page_widget.setLayout(layout_fourth_page)
+
         return fourth_page_widget
 
     def confirm_cleaning(self):
@@ -548,30 +551,304 @@ class SyncGUI(QMainWindow):
         """
 
 
-    def start_ecg_cleaning(self):
-        """Start the ECG cleaning process."""
+    def start_ecg_cleaning_interpolation(self):
+        """Start the ECG cleaning process using the interpolation method from Perceive toolbox."""
         if self.dataset_intra.raw_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
             # Perform the ECG cleaning process here
             try:
-                self.clean_ecg()
-                """
-                if self.dataset_intra.selected_channel_index_ecg == 0:
-                # Assuming you have a method to clean the ECG data
-                    self.clean_ecg(self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index_ecg])
-                    
-                elif self.dataset_intra.selected_channel_index_ecg == 1:
-                    self.clean_ecg(self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index_ecg])    
-                """
-
-                self.btn_plot_ecg_clean.setEnabled(True)  # Enable the button after cleaning
-                self.btn_show_detected_peaks.setEnabled(True)  # Enable the button after cleaning
-                self.btn_plot_ecg_artifact.setEnabled(True)  # Enable the button after cleaning
+                self.clean_ecg_interpolation()
 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
 
 
-    def clean_ecg(self):
+    def start_ecg_cleaning_template_sub(self):
+        """Start the ECG cleaning process using the interpolation method from Perceive toolbox."""
+        if self.dataset_intra.raw_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
+            # Perform the ECG cleaning process here
+            try:
+                self.clean_ecg_template_sub()
+
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
+
+
+    def clean_ecg_template_sub(self):
+        full_data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
+        times = self.dataset_intra.raw_data.times
+        start_rec = self.dataset_intra.start_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.start_time_right
+        end_rec = self.dataset_intra.end_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.end_time_right
+        sf_lfp= round(self.dataset_intra.raw_data.info['sfreq'])
+        if self.dataset_intra.artifact_polarity == "down":
+            REVERSED = True # true if cardiac artifacts are going downwards
+        else:
+            REVERSED = False
+
+        # crop data to remove sync pulses (amplitude is too big, it messes with template detection)
+        data_crop = full_data[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
+        # keep beginning and end:
+        beginning_part = full_data[:int(start_rec*sf_lfp)]
+        end_part = full_data[int(end_rec*sf_lfp):]
+
+        times_crop = times[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
+        
+        if REVERSED:
+            cropped_data = - data_crop # make sure the artifact is going upward for the detection
+            full_data = - full_data # make sure the artifact is going upward for the detection
+        else:
+            cropped_data = data_crop
+            full_data = full_data
+
+        ecg = {'proc': {}, 'stats': {}, 'cleandata': None, 'detected': False}
+        ns = len(cropped_data)
+        
+        # Segment the signal into overlapping windows
+        dwindow = int(round(sf_lfp))  # 1s window
+        dmove = sf_lfp  # 1s step
+        n_segments = (ns - dwindow) // dmove + 1
+        
+        x = np.array([cropped_data[i * dmove: i * dmove + dwindow] for i in range(n_segments) if i * dmove + dwindow <= ns])
+        
+        detected_peaks = []  # Store peak indices in the original timescale
+        
+        # Loop through each segment and find peaks
+        for i in range(n_segments):
+            segment = x[i]
+            peaks, _ = scipy.signal.find_peaks(segment, height=np.percentile(segment, 90), distance=sf_lfp//2)  # Adjust threshold & min distance
+            real_peaks = peaks + (i * dmove)  # Convert to original timescale
+            detected_peaks.extend(real_peaks)
+
+        detected_peaks = np.array(detected_peaks)
+        
+        # Define epoch window (-0.2s to +0.2s): only keep QRS complex (based on Stam et al., 2023)
+        pre_samples = int(0.2 * sf_lfp)
+        post_samples = int(0.2 * sf_lfp)
+        epoch_length = pre_samples + post_samples  # Total length of each epoch
+
+        epochs = []  # Store extracted heartbeats
+
+        for peak in detected_peaks:
+            start = peak - pre_samples
+            end = peak + post_samples
+            
+            if start >= 0 and end < ns:  # Ensure we don't go out of bounds
+                epochs.append(cropped_data[start:end])
+
+        epochs = np.array(epochs)
+
+        # Compute average heartbeat template
+        mean_epoch = np.mean(epochs, axis=0)
+        ecg['proc']['template1'] = mean_epoch  # First ECG template
+
+        # Plot the detected ECG epochs
+        time = np.linspace(-0.2, 0.2, epoch_length)  # Time in seconds
+
+        self.canvas_ecg_artifact.setEnabled(True)
+        self.ax_ecg_artifact.clear()
+        self.ax_ecg_artifact.set_title("Detected ECG epochs")
+
+        for epoch in epochs:
+            if REVERSED:
+                self.ax_ecg_artifact.plot(time, - epoch, color='gray', alpha=0.1)
+            else: 
+                self.ax_ecg_artifact.plot(time, epoch, color='gray', alpha=0.1)
+        
+        if REVERSED:
+            self.ax_ecg_artifact.plot(time, - mean_epoch, color='black', linewidth=2, label='Average ECG Template')
+        else:
+            self.ax_ecg_artifact.plot(time, mean_epoch, color='black', linewidth=2, label='Average ECG Template')
+        self.ax_ecg_artifact.set_xlabel("Time (s)")
+        self.ax_ecg_artifact.set_ylabel("Amplitude")
+        self.ax_ecg_artifact.legend()
+        self.canvas_ecg_artifact.draw()
+        self.toolbar_ecg_artifact.setEnabled(True)
+
+
+        # Temporal correlation for ECG detection
+        r = np.correlate(cropped_data, ecg['proc']['template1'], mode='same')
+        threshold = np.percentile(r, 95)
+        detected_peaks, _ = scipy.signal.find_peaks(r, height=threshold)
+
+        ecg['proc']['r'] = r
+        ecg['proc']['thresh'] = threshold
+
+        # Second pass for refining detection
+        refined_template = np.mean([cropped_data[p - pre_samples : p + post_samples] for p in detected_peaks if p - pre_samples > 0 and p + post_samples < ns], axis=0)
+        ecg['proc']['template2'] = refined_template
+        r2 = np.correlate(cropped_data, refined_template, mode='same')
+        threshold2 = np.percentile(r2, self.dataset_intra.ecg_tresh)
+        final_peaks, _ = scipy.signal.find_peaks(r2, height=threshold2, distance=sf_lfp//2)
+
+        ecg['proc']['r2'] = r2
+        ecg['proc']['thresh2'] = threshold2
+
+        # create a short QRS template to be substracted from the signal:
+        # Assuming the R-peak is at the center of the mean_epoch
+        center_idx = len(mean_epoch) // 2  
+
+        # Detect Q-peak (local minimum before R)
+        Q_range = mean_epoch[:center_idx]  # Left side of the R-peak
+        Q_idx = np.argmin(Q_range)  # Q-peak index (minimum value before R)
+
+        # Detect S-peak (local minimum after R)
+        S_range = mean_epoch[center_idx:]  # Right side of the R-peak
+        S_idx = np.argmin(S_range) + center_idx  # Adjust index relative to full epoch
+
+        max_offset = 30  # Maximum samples to check for minimal difference
+
+        Q_window = mean_epoch[Q_idx - max_offset : Q_idx]
+        S_window = mean_epoch[S_idx : S_idx + max_offset]
+        # Find pair (q, s) with smallest absolute difference
+        min_diff = float("inf")
+        start_idx, end_idx = None, None
+
+        for i, q_val in enumerate(Q_window):
+            for j, s_val in enumerate(S_window):
+                diff = abs(q_val - s_val)
+                if diff < min_diff:
+                    min_diff = diff
+                    start_idx = i
+                    end_idx = j
+
+
+        start_idx += Q_idx - max_offset  # Adjust to full epoch index
+        end_idx += S_idx  # Adjust to full epoch index
+
+        if mean_epoch[start_idx] != mean_epoch[end_idx]:
+            higher_value = max(mean_epoch[start_idx], mean_epoch[end_idx])
+            mean_epoch[start_idx] = mean_epoch[end_idx] = higher_value
+
+        complex_qrs_template = mean_epoch[start_idx:end_idx]  # Extract the QRS complex template
+        ecg['proc']['complex_qrs_template'] = complex_qrs_template
+
+        # Define original epoch length
+        original_length = len(mean_epoch)
+
+        # Compute missing samples on both sides
+        missing_left = start_idx  # Samples removed before start_idx
+        missing_right = original_length - end_idx  # Samples removed after end_idx
+
+        # Get common value to extend (the value at start_idx and end_idx are equal)
+        common_value = mean_epoch[start_idx]
+
+        # Extend the refined template with straight tails
+        extended_template = np.concatenate([
+            np.full(missing_left, common_value),  # Left tail
+            mean_epoch[start_idx:end_idx],                     # Main refined template
+            np.full(missing_right, common_value)   # Right tail
+        ])
+
+        #print(len(extended_template))
+        #print(len(refined_template))
+
+        # Ensure the length is correct
+        assert len(extended_template) == original_length, "Length mismatch!"
+
+        # overlap the average QRS template with equal tails onto the original QRS average:
+        if REVERSED:
+            self.ax_ecg_artifact.plot(time, - extended_template, color='purple', linewidth=2, label='Average with equal tails')
+        else : 
+            self.ax_ecg_artifact.plot(time, extended_template, color='purple', linewidth=2, label='Average with equal tails')
+        self.ax_ecg_artifact.legend()
+        self.canvas_ecg_artifact.draw()
+
+        # Estimate HR
+        peak_intervals = np.diff(final_peaks) / sf_lfp  # Convert to seconds
+        hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
+        ecg['stats']['hr'] = hr
+        ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
+
+        # Check ECG detection validity
+        if 55 <= hr <= 120 and len(final_peaks) > 10:
+            ecg['detected'] = True
+        
+        ### HERE ADD A PART TO DISPLAY THE COMPUTED HEART RATE !! ###
+
+        # Copy signal for cleaned output
+        clean_data = np.copy(cropped_data)
+        template = complex_qrs_template
+        template_len = len(template)
+
+        # 1. Find R-peak index in template (highest value for peaks going up, lower value for peaks going down)
+        template_r_idx = np.argmax(template)
+
+        # 2. Prepare design matrix for linear fit (scale + offset)
+        X_template = np.vstack([template, np.ones_like(template)]).T  # Shape: (template_len, 2)
+
+        for peak_idx in final_peaks:
+            # 3. Align R-peak in signal with R-peak in template
+            start = peak_idx - template_r_idx
+            end = start + template_len
+
+            # 4. Check signal boundaries
+            if start < 0 or end > len(cropped_data):
+                continue
+
+            # 5. Extract corresponding signal segment
+            segment = cropped_data[start:end]
+            #plt.plot(segment, label='Segment', color='gray', alpha=0.5)
+            #plt.plot(template, label='Template', color='blue', alpha=0.5)
+
+            # 6. Solve for optimal scale (a) and offset (b) using least squares
+            coeffs, _, _, _ = np.linalg.lstsq(X_template, segment, rcond=None)
+            a, b = coeffs
+
+            # 7. Build fitted template and subtract
+            fitted_template = a * template + b
+            #plt.plot(fitted_template, label='Fitted Template', color='red', alpha=0.5)
+            clean_data[start:end] -= fitted_template
+
+        # Restrore the full signal:
+        if REVERSED:
+            full_data = - full_data
+            clean_data = - clean_data
+
+        clean_data_full = np.concatenate([beginning_part, clean_data, end_part])
+        ecg['cleandata'] = clean_data_full
+
+        if self.dataset_intra.selected_channel_index_ecg == 0:
+            self.dataset_intra.cleaned_ecg_left = clean_data_full
+            self.dataset_intra.detected_peaks_left = final_peaks
+            self.dataset_intra.mean_epoch_left = mean_epoch
+            self.dataset_intra.epochs_left = epochs
+            print("Left channel cleaned")
+
+        elif self.dataset_intra.selected_channel_index_ecg == 1:
+            self.dataset_intra.cleaned_ecg_right = clean_data_full
+            self.dataset_intra.detected_peaks_right = final_peaks
+            self.dataset_intra.mean_epoch_right = mean_epoch
+            self.dataset_intra.epochs_right = epochs
+            print("Right channel cleaned")
+
+        # plot the detected peaks
+        self.canvas_detected_peaks.setEnabled(True)
+        self.toolbar_detected_peaks.setEnabled(True)
+        self.ax_detected_peaks.clear()
+        self.ax_detected_peaks.set_title('Detected Peaks')
+        if REVERSED:
+            self.ax_detected_peaks.plot(- cropped_data, label='Raw ECG')
+            self.ax_detected_peaks.plot(final_peaks, - cropped_data[final_peaks], 'ro', label='Detected Peaks')
+        else:
+            self.ax_detected_peaks.plot(cropped_data, label='Raw ECG')
+            self.ax_detected_peaks.plot(final_peaks, cropped_data[final_peaks], 'ro', label='Detected Peaks')
+        self.canvas_detected_peaks.draw()
+    
+        #plot an overlap of the raw and cleaned data
+        self.canvas_ecg_clean.setEnabled(True)
+        self.toolbar_ecg_clean.setEnabled(True)
+        self.ax_ecg_clean.clear()
+        self.ax_ecg_clean.set_title("Cleaned ECG Signal")
+        self.ax_ecg_clean.plot(times,full_data, label='Raw data')
+        self.ax_ecg_clean.plot(times,clean_data_full, label='Cleaned data')
+        self.ax_ecg_clean.set_xlabel("Time (s)")
+        self.ax_ecg_clean.set_ylabel("Amplitude")
+        self.ax_ecg_clean.legend()
+        self.canvas_ecg_clean.draw()
+
+        self.btn_confirm_cleaning.setEnabled(True)  # Enable the button after cleaning                
+
+
+    def clean_ecg_interpolation(self):
         full_data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
         times = self.dataset_intra.raw_data.times
         start_rec = self.dataset_intra.start_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.start_time_right
@@ -640,9 +917,9 @@ class SyncGUI(QMainWindow):
 
         # Plot the detected ECG epochs
         time = np.linspace(-0.5, 0.5, epoch_length)  # Time in seconds
-    
+
         self.canvas_ecg_artifact.setEnabled(True)
-        #self.toolbar_ecg_artifact.setEnabled(True)
+        self.toolbar_ecg_artifact.setEnabled(True)
         self.ax_ecg_artifact.clear()
         self.ax_ecg_artifact.set_title("Detected ECG epochs")
 
@@ -766,6 +1043,7 @@ class SyncGUI(QMainWindow):
             self.label_start_time.setText(f"Start time: {start_time} s")
             self.label_end_time.setText(f"End time: {end_time} s")
             self.btn_start_ecg_cleaning.setEnabled(True)  # Enable the button after validation
+            self.btn_start_ecg_cleaning_template_sub.setEnabled(True)
 
             if self.radio_button_down.isChecked():
                 self.dataset_intra.artifact_polarity = "down"

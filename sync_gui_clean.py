@@ -211,18 +211,6 @@ class SyncGUI(QMainWindow):
         # Add the horizontal panel layout to the main layout
         main_layout.addLayout(panel_layout)
 
-        saving_folder_layout = QHBoxLayout()
-
-        # Create a button to select the folder where to save the results
-        self.btn_select_folder = Button("Select folder to save results", "lightyellow")
-        self.btn_select_folder.clicked.connect(self.select_folder)
-        saving_folder_layout.addWidget(self.btn_select_folder)
-
-        self.label_saving_folder = QLabel("No saving folder selected")
-        self.label_saving_folder.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
-        saving_folder_layout.addWidget(self.label_saving_folder)
-
-        main_layout.addLayout(saving_folder_layout)
 
         # Synchronize and save buttons
         self.label_sync_and_save = QLabel('Synchronize and save as:')
@@ -510,6 +498,9 @@ class SyncGUI(QMainWindow):
         self.canvas_ecg_artifact = FigureCanvas(self.figure_ecg_artifact)
         self.toolbar_ecg_artifact = NavigationToolbar(self.canvas_ecg_artifact, self)
 
+        # Display the computed heart rate:
+        self.label_heart_rate_lfp = QLabel('Heart Rate:')
+
         # Create a button to confirm the cleaning and continue with the synchronization
         self.btn_confirm_cleaning = Button("Confirm cleaning and use cleaned channel for synchronization", "lightyellow")
         self.btn_confirm_cleaning.clicked.connect(self.confirm_cleaning)
@@ -520,6 +511,7 @@ class SyncGUI(QMainWindow):
         layout_right_fourth_page.addWidget(self.canvas_detected_peaks)  # Add the canvas to the layout
         layout_right_fourth_page.addWidget(self.toolbar_ecg_artifact)
         layout_right_fourth_page.addWidget(self.canvas_ecg_artifact)  # Add the canvas to the layout
+        layout_right_fourth_page.addWidget(self.label_heart_rate_lfp)
         layout_right_fourth_page.addWidget(self.btn_confirm_cleaning)
 
         # Add the horizontal panel layout to the main layout
@@ -757,6 +749,7 @@ class SyncGUI(QMainWindow):
         hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
         ecg['stats']['hr'] = hr
         ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
+        self.label_heart_rate_lfp.setText(f'Heart rate: {hr} bpm')
 
         # Check ECG detection validity
         if 55 <= hr <= 120 and len(final_peaks) > 10:
@@ -964,6 +957,7 @@ class SyncGUI(QMainWindow):
         hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
         ecg['stats']['hr'] = hr
         ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
+        self.label_heart_rate_lfp.setText(f'Heart rate: {hr} bpm')
 
         # Check ECG detection validity
         if 55 <= hr <= 120 and len(final_peaks) > 10:
@@ -1486,9 +1480,21 @@ class SyncGUI(QMainWindow):
         self.artifact_layout_intra.addLayout(self.automatic_artifact_layout_intra)
         self.artifact_layout_intra.addLayout(self.manual_artifact_layout_intra)
 
+        saving_folder_layout = QHBoxLayout()
+
+        # Create a button to select the folder where to save the results
+        self.btn_select_folder = Button("Select folder to save results", "lightyellow")
+        self.btn_select_folder.clicked.connect(self.select_folder)
+        saving_folder_layout.addWidget(self.btn_select_folder)
+
+        self.label_saving_folder = QLabel("No saving folder selected")
+        self.label_saving_folder.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
+        saving_folder_layout.addWidget(self.label_saving_folder)
+
         # Add channel layout to main layout for intracranial
         layout.addLayout(self.channel_layout_intra)
         layout.addLayout(self.artifact_layout_intra)
+        layout.addLayout(saving_folder_layout)
 
 
         return layout
@@ -1724,13 +1730,94 @@ class SyncGUI(QMainWindow):
         self.artifact_layout_xdf.addLayout(self.automatic_artifact_layout_xdf)
         self.artifact_layout_xdf.addLayout(self.manual_artifact_layout_xdf)
 
+        self.heart_rate_layout = QHBoxLayout()
+        self.btn_select_ecg_channel = Button("Select ECG channel to compute heart rate", "lightgreen")
+        self.btn_select_ecg_channel.setEnabled(False)  # Initially inactive
+        self.btn_select_ecg_channel.clicked.connect(self.select_ecg_channel_and_compute_hr_xdf)
+        self.heart_rate_layout.addWidget(self.btn_select_ecg_channel)
+
+        # Create a label to display the selected channel name
+        self.ecg_channel_label = QLabel("No channel selected")
+        self.ecg_channel_label.setEnabled(False) # Initially inactive
+        self.heart_rate_layout.addWidget(self.ecg_channel_label)  
+
 
         # Add channel layout to main layout for .xdf
         layout.addLayout(self.channel_layout_xdf)
         layout.addLayout(self.artifact_layout_xdf)
+        layout.addLayout(self.heart_rate_layout)
 
 
         return layout
+
+    def select_ecg_channel_and_compute_hr_xdf(self):
+        """Open a dialog to select a channel by name from the .xdf file."""
+        if self.dataset_extra.raw_data is not None:
+            channel_names = self.dataset_extra.ch_names  # Get the channel names
+            dialog = QWidget()
+            dialog.setWindowTitle("Select ECG channel")
+            layout = QVBoxLayout(dialog)
+
+            # Create a list widget to display channel names
+            channel_list = QListWidget(dialog)
+            channel_list.addItems(channel_names)  # Add channel names to the list
+            layout.addWidget(channel_list)
+
+            # Create OK and Cancel buttons
+            ok_button = QPushButton("OK", dialog)
+            cancel_button = QPushButton("Cancel", dialog)
+            layout.addWidget(ok_button)
+            layout.addWidget(cancel_button)
+
+            # Define button actions
+            def on_ok():
+                selected_items = channel_list.selectedItems()
+                if selected_items:
+                    self.dataset_extra.ecg_selected_channel_name = selected_items[0].text()  # Get the selected channel name
+                    self.dataset_extra.ecg_selected_channel_index = channel_names.index(self.dataset_extra.ecg_selected_channel_name)  # Get the index
+                    channel_data = self.dataset_extra.raw_data.get_data()[self.dataset_extra.ecg_selected_channel_index]
+                    # Apply 0.1 Hz-100Hz band-pass filter to ECG data
+                    b, a = scipy.signal.butter(1, 0.05, "highpass")
+                    detrended_data = scipy.signal.filtfilt(b, a, channel_data)
+                    low_cutoff = 100.0  # Hz
+                    b2, a2 = scipy.signal.butter(
+                        N=4,  # Filter order
+                        Wn=low_cutoff,
+                        btype="lowpass",
+                        fs=self.dataset_extra.sf 
+                    )
+                    ecg_data = scipy.signal.filtfilt(b2, a2, detrended_data)
+
+                    # Remove the first and last 30 seconds (to avoid sync pulses while computing the threshold):
+                    start = int(30*self.dataset_extra.sf)
+                    end = int((self.dataset_extra.times[-1] - 30)*self.dataset_extra.sf)
+                    ecg_data_cropped = ecg_data[start:end]
+                    threshold = np.percentile(ecg_data_cropped, 95)
+                    
+                    # calculate heart rate based on the ecg_data channel:
+                    heartbeats = scipy.signal.find_peaks(ecg_data, height=threshold, distance = self.dataset_extra.sf // 2)
+                    hr = len(heartbeats[0]) / (len(ecg_data) / self.dataset_extra.sf) * 60  # in bpm
+
+                    if not 55 <= hr <= 120: # if the cardiac artifact polarity is reversed, it doesn't find peaks, so the signal should be reversed before computing again
+                        # calculate heart rate based on the ecg_data channel:
+                        threshold = np.percentile(- ecg_data_cropped, 95)
+                        heartbeats = scipy.signal.find_peaks(- ecg_data, height=threshold, distance = self.dataset_extra.sf // 2)
+                        hr = len(heartbeats[0]) / (len(ecg_data) / self.dataset_extra.sf) * 60  # in bpm
+
+                    self.ecg_channel_label.setText(f"Heart rate: {hr} bpm")
+                    dialog.close()
+                    #self.update_synchronize_button_state()  # Check if we can enable the button
+
+            def on_cancel():
+                dialog.close()
+
+            ok_button.clicked.connect(on_ok)
+            cancel_button.clicked.connect(on_cancel)
+
+            dialog.setLayout(layout)
+            dialog.show()
+
+
 
 
     def load_ext_file(self):
@@ -1761,6 +1848,9 @@ class SyncGUI(QMainWindow):
             # Show channel selection and plot buttons for .xdf
             self.channel_label_xdf.setEnabled(True)
             self.btn_select_channel_xdf.setEnabled(True)
+            self.btn_select_ecg_channel.setEnabled(True)
+            self.ecg_channel_label.setEnabled(True)
+            
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load .poly5 file: {e}")
 
@@ -1779,6 +1869,7 @@ class SyncGUI(QMainWindow):
             # Show channel selection and plot buttons for .xdf
             self.channel_label_xdf.setEnabled(True)
             self.btn_select_channel_xdf.setEnabled(True)
+            self.btn_select_ecg_channel.setEnabled(True)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load .xdf file: {e}")
 

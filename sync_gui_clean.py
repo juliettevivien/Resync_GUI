@@ -526,15 +526,47 @@ class SyncGUI(QMainWindow):
 
     def confirm_cleaning(self):
         if self.dataset_intra.selected_channel_index_ecg == 0:
-            # Replace the corresponding channel's data
+            # 1. Extract the original channel before you overwrite it
+            original_data = self.dataset_intra.raw_data._data[0, :].copy()  # shape (n_times,)
+            sfreq = self.dataset_intra.raw_data.info['sfreq']
+
+            # 2. Create new RawArray with this data
+            info_new = mne.create_info(
+                ch_names=['RAW_Left_STN'],
+                sfreq=sfreq,
+                ch_types=['eeg']
+            )
+            raw_new = mne.io.RawArray(original_data[np.newaxis, :], info_new)
+
+            # 3. Append it to the original Raw object
+            self.dataset_intra.raw_data.add_channels([raw_new])
+            
+            # Replace the corresponding channel's data with the cleaned data
             self.dataset_intra.raw_data._data[0,:] = self.dataset_intra.cleaned_ecg_left
             #self.dataset_intra.raw_data.get_data()[0] = self.dataset_intra.cleaned_ecg_left
             print("Cleaning confirmed. Replacing raw data with cleaned data in the left channel.")
+
         elif self.dataset_intra.selected_channel_index_ecg == 1:
+            # 1. Extract the original channel before you overwrite it
+            original_data = self.dataset_intra.raw_data._data[1, :].copy()  # shape (n_times,)
+            sfreq = self.dataset_intra.raw_data.info['sfreq']
+
+            # 2. Create new RawArray with this data
+            info_new = mne.create_info(
+                ch_names=['RAW_Right_STN'],
+                sfreq=sfreq,
+                ch_types=['eeg']
+            )
+            raw_new = mne.io.RawArray(original_data[np.newaxis, :], info_new)
+
+            # 3. Append it to the original Raw object
+            self.dataset_intra.raw_data.add_channels([raw_new])            
+            
             # Replace the corresponding channel's data
             self.dataset_intra.raw_data._data[1,:] = self.dataset_intra.cleaned_ecg_right
             #self.dataset_intra.raw_data.get_data()[1] = self.dataset_intra.cleaned_ecg_right
             print("Cleaning confirmed. Replacing raw data with cleaned data in the right channel.")
+        
         """
         if self.dataset_intra.cleaned_ecg_left is not None and self.dataset_intra.selected_channel_index_ecg == 0:
             print("replacing left channel with cleaned data")
@@ -2067,7 +2099,12 @@ class SyncGUI(QMainWindow):
         lfp_rec_offset.set_annotations(annotations_lfp) # set the new annotations
 
         external_title = ("SYNCHRONIZED_EXTERNAL_" + str(self.dataset_extra.file_name[:-4]) + ".set")
-        lfp_title = ("SYNCHRONIZED_INTRACRANIAL_" + str(self.dataset_intra.file_name[:-4]) + ".set")
+
+        if len(self.dataset_intra.raw_data.ch_names) > 6:
+            lfp_title = ("SYNCHRONIZED_INTRACRANIAL_CLEANED_" + str(self.dataset_intra.file_name[:-4]) + ".set")
+        else:
+            lfp_title = ("SYNCHRONIZED_INTRACRANIAL_" + str(self.dataset_intra.file_name[:-4]) + ".set")
+
 
         if self.folder_path is not None:
             fname_external_out=join(self.folder_path, external_title)

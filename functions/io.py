@@ -99,6 +99,7 @@ def load_xdf_artifact_channel(
 def write_set(fname, raw, annotations_onset, fs, times):
     """Export raw to EEGLAB .set file."""
     data = raw.get_data() * 1e6  # convert to microvolts
+    #data = raw.get_data()
     ch_names = raw.info["ch_names"]
     chanlocs = fromarrays([ch_names], names=["labels"])
     events = fromarrays([raw.annotations.description,

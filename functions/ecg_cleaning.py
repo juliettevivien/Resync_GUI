@@ -1,0 +1,1536 @@
+    #######################################################################
+    #                         ECG CLEANING FUNCTIONS                      #
+    #######################################################################
+
+from PyQt5.QtWidgets import QMessageBox
+import numpy as np
+import scipy
+import matplotlib.pyplot as plt
+
+
+
+    #######################################################################
+    #########                  INTERPOLATION METHOD               #########
+    #######################################################################        
+
+def start_ecg_cleaning_interpolation(self):
+    """Start the ECG cleaning process using the interpolation method from Perceive toolbox."""
+    if self.dataset_intra.raw_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
+        # Perform the ECG cleaning process here
+        try:
+            clean_ecg_interpolation_no_ext(self)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
+            
+
+def clean_ecg_interpolation_no_ext(self):
+    full_data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
+    times = self.dataset_intra.raw_data.times
+    start_rec = self.dataset_intra.start_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.start_time_right
+    end_rec = self.dataset_intra.end_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.end_time_right
+    sf_lfp= round(self.dataset_intra.raw_data.info['sfreq'])
+    if self.dataset_intra.artifact_polarity == "down":
+        REVERSED = True # true if cardiac artifacts are going downwards
+    else:
+        REVERSED = False
+
+    # crop data to remove sync pulses (amplitude is too big, it messes with template detection)
+    data_crop = full_data[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
+    # keep beginning and end:
+    beginning_part = full_data[:int(start_rec*sf_lfp)]
+    end_part = full_data[int(end_rec*sf_lfp):]
+
+    times_crop = times[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
+    
+    if REVERSED:
+        cropped_data = - data_crop
+        full_data = - full_data
+    else:
+        cropped_data = data_crop
+        full_data = full_data
+
+    ecg = {'proc': {}, 'stats': {}, 'cleandata': None, 'detected': False}
+    ns = len(cropped_data)
+    
+    # Segment the signal into overlapping windows
+    dwindow = int(round(sf_lfp))  # 1s window
+    dmove = sf_lfp  # 1s step
+    n_segments = (ns - dwindow) // dmove + 1
+    
+    x = np.array([cropped_data[i * dmove: i * dmove + dwindow] for i in range(n_segments) if i * dmove + dwindow <= ns])
+    
+    detected_peaks = []  # Store peak indices in the original timescale
+    
+    # Loop through each segment and find peaks
+    for i in range(n_segments):
+        segment = x[i]
+        peaks, _ = scipy.signal.find_peaks(segment, height=np.percentile(segment, 90), distance=sf_lfp//2)  # Adjust threshold & min distance
+        real_peaks = peaks + (i * dmove)  # Convert to original timescale
+        detected_peaks.extend(real_peaks)
+
+    detected_peaks = np.array(detected_peaks)
+    
+    # Define epoch window (-0.5s to +0.5s)
+    pre_samples = int(0.5 * sf_lfp)
+    post_samples = int(0.5 * sf_lfp)
+    epoch_length = pre_samples + post_samples  # Total length of each epoch
+
+    epochs = []  # Store extracted heartbeats
+
+    for peak in detected_peaks:
+        start = peak - pre_samples
+        end = peak + post_samples
+        
+        if start >= 0 and end < ns:  # Ensure we don't go out of bounds
+            epochs.append(cropped_data[start:end])
+
+    epochs = np.array(epochs)
+
+    # Compute average heartbeat template
+    mean_epoch = np.mean(epochs, axis=0)
+    ecg['proc']['template1'] = mean_epoch  # First ECG template
+
+    # Plot the detected ECG epochs
+    time = np.linspace(-0.5, 0.5, epoch_length)  # Time in seconds
+
+    self.canvas_ecg_artifact.setEnabled(True)
+    self.toolbar_ecg_artifact.setEnabled(True)
+    self.ax_ecg_artifact.clear()
+    self.ax_ecg_artifact.set_title("Detected ECG epochs")
+
+    for epoch in epochs:
+        if REVERSED:
+            epoch = -epoch
+        self.ax_ecg_artifact.plot(time, epoch, color='gray', alpha=0.3)
+    
+    if REVERSED:
+        mean_epoch = - mean_epoch
+
+    self.ax_ecg_artifact.plot(time, mean_epoch, color='red', linewidth=2, label='Average ECG Template')
+    self.ax_ecg_artifact.set_xlabel("Time (s)")
+    self.ax_ecg_artifact.set_ylabel("Amplitude")
+    self.ax_ecg_artifact.legend()
+    self.canvas_ecg_artifact.draw()
+
+
+    # Temporal correlation for ECG detection
+    r = np.correlate(cropped_data, ecg['proc']['template1'], mode='same')
+    threshold = np.percentile(r, 95)
+    detected_peaks, _ = scipy.signal.find_peaks(r, height=threshold)
+
+    if len(detected_peaks) < 5:
+        return ecg  # Not enough peaks detected
+
+    ecg['proc']['r'] = r
+    ecg['proc']['thresh'] = threshold
+
+    # Second pass for refining detection
+    refined_template = np.mean([cropped_data[p - dwindow//2 : p + dwindow//2] for p in detected_peaks if p - dwindow//2 > 0 and p + dwindow//2 < ns], axis=0)
+    ecg['proc']['template2'] = refined_template
+    r2 = np.correlate(cropped_data, refined_template, mode='same')
+    threshold2 = np.percentile(r2, self.dataset_intra.ecg_thresh)
+    final_peaks, _ = scipy.signal.find_peaks(r2, height=threshold2, distance=sf_lfp//2)
+
+    ecg['proc']['r2'] = r2
+    ecg['proc']['thresh2'] = threshold2
+
+    # Estimate HR
+    peak_intervals = np.diff(final_peaks) / sf_lfp  # Convert to seconds
+    hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
+    ecg['stats']['hr'] = hr
+    ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
+    self.label_heart_rate_lfp.setText(f'Heart rate: {hr} bpm')
+
+    # Check ECG detection validity
+    if 55 <= hr <= 120 and len(final_peaks) > 10:
+        ecg['detected'] = True
+
+    # Remove artifacts (simple interpolation)
+    clean_data = np.copy(cropped_data)
+    for p in final_peaks:
+        clean_data[max(0, p - 5): min(ns, p + 5)] = np.nan  # NaN out artifacts
+    clean_data = np.interp(np.arange(ns), np.arange(ns)[~np.isnan(clean_data)], clean_data[~np.isnan(clean_data)])
+
+    if REVERSED:
+        full_data = - full_data
+        clean_data = - clean_data
+
+    clean_data_full = np.concatenate([beginning_part, clean_data, end_part])
+    ecg['cleandata'] = clean_data_full
+
+    if self.dataset_intra.selected_channel_index_ecg == 0:
+        self.dataset_intra.cleaned_ecg_left = clean_data_full
+        self.dataset_intra.detected_peaks_left = final_peaks
+        self.dataset_intra.mean_epoch_left = mean_epoch
+        self.dataset_intra.epochs_left = epochs
+        print("Left channel cleaned")
+
+    elif self.dataset_intra.selected_channel_index_ecg == 1:
+        self.dataset_intra.cleaned_ecg_right = clean_data_full
+        self.dataset_intra.detected_peaks_right = final_peaks
+        self.dataset_intra.mean_epoch_right = mean_epoch
+        self.dataset_intra.epochs_right = epochs
+        print("Right channel cleaned")
+
+    # plot the detected peaks
+    self.canvas_detected_peaks.setEnabled(True)
+    self.toolbar_detected_peaks.setEnabled(True)
+    self.ax_detected_peaks.clear()
+    self.ax_detected_peaks.set_title('Detected Peaks')
+    if REVERSED:
+        self.ax_detected_peaks.plot(- cropped_data, label='Raw ECG')
+        self.ax_detected_peaks.plot(final_peaks, - cropped_data[final_peaks], 'ro', label='Detected Peaks')
+        self.canvas_detected_peaks.draw()
+    else:
+        self.ax_detected_peaks.plot(cropped_data, label='Raw ECG')
+        self.ax_detected_peaks.plot(final_peaks, cropped_data[final_peaks], 'ro', label='Detected Peaks')
+        self.canvas_detected_peaks.draw()            
+
+    #plot an overlap of the raw and cleaned data
+    self.canvas_ecg_clean.setEnabled(True)
+    self.toolbar_ecg_clean.setEnabled(True)
+    self.ax_ecg_clean.clear()
+    self.ax_ecg_clean.set_title("Cleaned ECG Signal")
+    self.ax_ecg_clean.plot(times,full_data, label='Raw data')
+    self.ax_ecg_clean.plot(times,clean_data_full, label='Cleaned data')
+    self.ax_ecg_clean.set_xlabel("Time (s)")
+    self.ax_ecg_clean.set_ylabel("Amplitude")
+    self.ax_ecg_clean.legend()
+    self.canvas_ecg_clean.draw()
+
+    self.btn_confirm_cleaning.setEnabled(True)  # Enable the button after cleaning
+
+
+def start_ecg_cleaning_interpolation_with_ext(self):
+    """Start the ECG cleaning process using the interpolation method from Perceive toolbox."""
+    if self.dataset_intra.synced_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
+        # Perform the ECG cleaning process here
+        try:
+            clean_ecg_interpolation_with_ext(self)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
+            
+def clean_ecg_interpolation_with_ext(self):
+    #### FIRST STEP: PREDETERMINE R-PEAKS TIMESTAMPS USING ECG CHANNEL ####
+    """ The externally recorded ECG signal was used to predetermine
+    the timestamps of the R-peaks. The ECG signal was z-scored ((x-l)/r) 
+    over the entire recording and the function findpeaks was used to search 
+    for R-peaks with a specific height (at least two and-a-half times 
+    the standard deviation of the entire time series) and at a 
+    specific inter-peak distance (minimally 500 ms). 
+    The algorithm accounts for a negative QRS complex
+    by repeating this procedure after multiplying the signal with
+    1. For both orientations of the LFP signal, the values of the
+    peaks were averaged and the peaks with the highest mean
+    determined the orientation of the QRS complexes, provided
+    that at least the same amount of peaks were detected.
+    """
+    data_extra = self.dataset_extra.synced_data.get_data()[self.dataset_extra.selected_channel_index_ecg]
+    #data_extra_scaled = data_extra * y_max_factor
+    data_extra_scaled = data_extra
+
+    # Apply 0.1 Hz-100Hz band-pass filter to ECG data
+    b, a = scipy.signal.butter(1, 0.05, "highpass")
+    detrended_data = scipy.signal.filtfilt(b, a, data_extra_scaled)
+    low_cutoff = 100.0  # Hz
+    b2, a2 = scipy.signal.butter(
+        N=4,  # Filter order
+        Wn=low_cutoff,
+        btype="lowpass",
+        fs=self.dataset_extra.sf 
+    )
+    ecg_data = scipy.signal.filtfilt(b2, a2, detrended_data)
+    timescale_extra = np.linspace(0, self.dataset_extra.synced_data.get_data().shape[1]/self.dataset_extra.sf, self.dataset_extra.synced_data.get_data().shape[1])
+
+    # 1. Z-score the ECG signal
+    ecg_z = (ecg_data - np.mean(ecg_data)) / np.std(ecg_data)
+
+    # 2. Define peak detection params
+    threshold = 2.5  # 2.5 * std (signal is already z-scored)
+    min_distance_samples = int(0.5 * self.dataset_extra.sf)  # 500 ms in samples
+
+    # 3. Detect peaks in original signal
+    peaks_pos, props_pos = scipy.signal.find_peaks(
+        ecg_z,
+        height=threshold,
+        distance=min_distance_samples
+    )
+
+    # 4. Detect peaks in inverted signal
+    peaks_neg, props_neg = scipy.signal.find_peaks(
+        -ecg_z,
+        height=threshold,
+        distance=min_distance_samples
+    )
+
+    # 5. Compare polarity by mean peak amplitude
+    mean_pos = np.mean(props_pos['peak_heights']) if len(peaks_pos) > 0 else 0
+    mean_neg = np.mean(props_neg['peak_heights']) if len(peaks_neg) > 0 else 0
+
+    # 6. Select better polarity (also check similar number of peaks)
+    if len(peaks_pos) >= len(peaks_neg):
+        chosen_peaks = peaks_pos
+        orientation = 'positive'
+    else:
+        chosen_peaks = peaks_neg
+        orientation = 'negative'        
+
+    #### Plot the detected peaks ####
+    self.canvas_detected_peaks_with_ext.setEnabled(True)
+    self.toolbar_detected_peaks_with_ext.setEnabled(True)
+    self.ax_detected_peaks_with_ext.clear()
+    self.ax_detected_peaks_with_ext.set_title('Detected Peaks')
+    self.ax_detected_peaks_with_ext.plot(timescale_extra, ecg_data, label='Raw ECG', alpha=0.1)
+    self.ax_detected_peaks_with_ext.plot(timescale_extra[chosen_peaks], ecg_data[chosen_peaks], 'ro', label='Detected Peaks', alpha=0.1)
+    self.canvas_detected_peaks_with_ext.draw()
+
+
+    #### SECOND STEP: FIND CORRESPONDING R-PEAKS IN THE LFP SIGNAL ####
+    """ Subsequently, the LFP signal was searched for peaks using
+    numpy functions min and max in a window of 20 samples
+    prior and after the R-peaks found in the ECG signal. This
+    window was adopted in order to account for inaccuracies
+    in the synchronization of the LFP- and ECG signals. The absolute 
+    values of the peaks found with min and max were averaged and the peaks
+    with the highest absolute mean determined the orientation of the QRS 
+    complexes.
+    """
+
+    full_data = self.dataset_intra.synced_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
+    times = np.linspace(0, self.dataset_intra.synced_data.get_data().shape[1]/self.dataset_intra.sf, self.dataset_intra.synced_data.get_data().shape[1])
+    
+    #start_rec = self.dataset_intra.start_time_left_with_ext if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.start_time_right_with_ext
+    #end_rec = self.dataset_intra.end_time_left_with_ext if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.end_time_right_with_ext
+    """
+    For each ECG R-peak, search for LFP peaks (min and max) in ±20 LFP samples.
+    Returns:
+        selected_peaks: list of peak values (either all max or all min)
+        polarity: 'positive' or 'negative' QRS orientation in LFP
+    """
+    # Convert R-peaks from ECG samples to seconds
+    r_peak_times_sec = chosen_peaks / self.dataset_extra.sf
+
+    # Convert times to LFP sample indices
+    r_peaks_lfp_idx = np.round(r_peak_times_sec * self.dataset_intra.sf).astype(int)
+    print(r_peaks_lfp_idx)
+
+    window = 20  # ±20 LFP samples
+    max_peaks = []
+    min_peaks = []
+
+    for idx in r_peaks_lfp_idx:
+        start = max(idx - window, 0)
+        end = min(idx + window + 1, len(full_data))
+        segment = full_data[start:end]
+
+        if len(segment) > 0:
+            max_peaks.append(np.max(segment))
+            min_peaks.append(np.min(segment))
+
+    # Calculate mean absolute values
+    mean_abs_max = np.mean(np.abs(max_peaks)) if max_peaks else 0
+    mean_abs_min = np.mean(np.abs(min_peaks)) if min_peaks else 0
+    print(mean_abs_max)
+    print(mean_abs_min)
+
+    # Choose the orientation with the higher mean absolute amplitude
+    if mean_abs_max >= mean_abs_min:
+        selected_peaks = max_peaks
+        polarity = 'positive'
+        print(polarity)
+    else:
+        selected_peaks = min_peaks
+        polarity = 'negative'
+        print(polarity)
+
+    # Choose the orientation with the higher mean absolute amplitude
+    lfp_peak_indices = []
+    polarity = None
+    if mean_abs_max >= mean_abs_min:
+        polarity = 'positive'
+        for idx in r_peaks_lfp_idx:
+            start = max(idx - window, 0)
+            end = min(idx + window + 1, len(full_data))
+            segment = full_data[start:end]
+            local_max_idx = np.argmax(segment)
+            peak_global_idx = start + local_max_idx
+            lfp_peak_indices.append(peak_global_idx)
+    else:
+        polarity = 'negative'
+        for idx in r_peaks_lfp_idx:
+            start = max(idx - window, 0)
+            end = min(idx + window + 1, len(full_data))
+            segment = full_data[start:end]
+            local_min_idx = np.argmin(segment)
+            peak_global_idx = start + local_min_idx
+            lfp_peak_indices.append(peak_global_idx)
+
+    #### Plot the detected peaks ####
+    #self.canvas_detected_peaks_with_ext.setEnabled(True)
+    #self.toolbar_detected_peaks_with_ext.setEnabled(True)
+    #self.ax_detected_peaks_with_ext.clear()
+    #self.ax_detected_peaks_with_ext.set_title('Detected Peaks')
+    self.ax_detected_peaks_with_ext.plot(times, full_data, label='Raw LFP', color='black')
+    self.ax_detected_peaks_with_ext.plot(np.array(times)[lfp_peak_indices], np.array(full_data)[lfp_peak_indices], 'ro', label='LFP Peaks')
+    self.ax_detected_peaks.legend()
+    self.canvas_detected_peaks_with_ext.draw()
+
+    """
+    #sf_lfp= round(self.dataset_intra.sf)
+    if self.dataset_intra.artifact_polarity_with_ext == "down":
+        REVERSED = True # true if cardiac artifacts are going downwards
+    else:
+        REVERSED = False
+
+    # crop data to remove sync pulses (amplitude is too big, it messes with template detection)
+    data_crop = full_data[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
+    # keep beginning and end:
+    beginning_part = full_data[:int(start_rec*sf_lfp)]
+    end_part = full_data[int(end_rec*sf_lfp):]
+
+    times_crop = times[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
+    
+    if REVERSED:
+        cropped_data = - data_crop
+        full_data = - full_data
+    else:
+        cropped_data = data_crop
+        full_data = full_data
+
+    ecg = {'proc': {}, 'stats': {}, 'cleandata': None, 'detected': False}
+    ns = len(cropped_data)
+    
+    # Segment the signal into overlapping windows
+    dwindow = int(round(sf_lfp))  # 1s window
+    dmove = sf_lfp  # 1s step
+    n_segments = (ns - dwindow) // dmove + 1
+    
+    x = np.array([cropped_data[i * dmove: i * dmove + dwindow] for i in range(n_segments) if i * dmove + dwindow <= ns])
+    
+    detected_peaks = []  # Store peak indices in the original timescale
+    
+    # Loop through each segment and find peaks
+    for i in range(n_segments):
+        segment = x[i]
+        peaks, _ = scipy.signal.find_peaks(segment, height=np.percentile(segment, 90), distance=sf_lfp//2)  # Adjust threshold & min distance
+        real_peaks = peaks + (i * dmove)  # Convert to original timescale
+        detected_peaks.extend(real_peaks)
+
+    detected_peaks = np.array(detected_peaks)
+    """
+
+    # Create a ECG template #
+    # Define epoch window (-0.5s to +0.5s)
+    pre_samples = int(0.5 * self.dataset_intra.sf)
+    post_samples = int(0.5 * self.dataset_intra.sf)
+    epoch_length = pre_samples + post_samples  # Total length of each epoch
+
+    epochs = []  # Store extracted heartbeats
+
+    for peak in lfp_peak_indices:
+        start = peak - pre_samples
+        end = peak + post_samples
+        
+        if start >= 0 and end < len(full_data):  # Ensure we don't go out of bounds
+            epochs.append(full_data[start:end])
+
+    epochs = np.array(epochs)
+
+    # Compute average heartbeat template
+    mean_epoch = np.mean(epochs, axis=0)
+    #ecg['proc']['template1'] = mean_epoch  # First ECG template
+
+    # Plot the detected ECG epochs
+    time = np.linspace(-0.5, 0.5, epoch_length)  # Time in seconds
+
+    self.canvas_ecg_artifact_with_ext.setEnabled(True)
+    self.toolbar_ecg_artifact_with_ext.setEnabled(True)
+    self.ax_ecg_artifact_with_ext.clear()
+    self.ax_ecg_artifact_with_ext.set_title("Detected ECG epochs")
+
+    for epoch in epochs:
+    #    if REVERSED:
+    #        epoch = -epoch
+        self.ax_ecg_artifact_with_ext.plot(time, epoch, color='gray', alpha=0.3)
+    
+    #if REVERSED:
+    #    mean_epoch = - mean_epoch
+
+    self.ax_ecg_artifact_with_ext.plot(time, mean_epoch, color='red', linewidth=2, label='Average ECG Template')
+    self.ax_ecg_artifact_with_ext.set_xlabel("Time (s)")
+    self.ax_ecg_artifact_with_ext.set_ylabel("Amplitude")
+    self.ax_ecg_artifact_with_ext.legend()
+    self.canvas_ecg_artifact_with_ext.draw()
+
+    """
+    # Temporal correlation for ECG detection
+    r = np.correlate(cropped_data, ecg['proc']['template1'], mode='same')
+    threshold = np.percentile(r, 95)
+    detected_peaks, _ = scipy.signal.find_peaks(r, height=threshold)
+
+    if len(detected_peaks) < 5:
+        return ecg  # Not enough peaks detected
+
+    ecg['proc']['r'] = r
+    ecg['proc']['thresh'] = threshold
+
+    # Second pass for refining detection
+    refined_template = np.mean([cropped_data[p - dwindow//2 : p + dwindow//2] for p in detected_peaks if p - dwindow//2 > 0 and p + dwindow//2 < ns], axis=0)
+    ecg['proc']['template2'] = refined_template
+    r2 = np.correlate(cropped_data, refined_template, mode='same')
+    threshold2 = np.percentile(r2, self.dataset_intra.ecg_thresh_with_ext)
+    final_peaks, _ = scipy.signal.find_peaks(r2, height=threshold2, distance=sf_lfp//2)
+
+    ecg['proc']['r2'] = r2
+    ecg['proc']['thresh2'] = threshold2
+    """
+
+    # Estimate HR
+    peak_intervals = np.diff(lfp_peak_indices) / self.dataset_intra.sf  # Convert to seconds
+    hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
+    #ecg['stats']['hr'] = hr
+    #ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
+    self.label_heart_rate_lfp_with_ext.setText(f'Heart rate: {hr} bpm')
+
+    # Check ECG detection validity
+    #if 55 <= hr <= 120 and len(lfp_peak_indices) > 10:
+        #ecg['detected'] = True
+
+    # Remove artifacts (simple interpolation)
+    ns = len(full_data)
+    clean_data = np.copy(full_data)
+    for p in lfp_peak_indices:
+        clean_data[max(0, p - 5): min(ns, p + 5)] = np.nan  # NaN out artifacts
+    clean_data = np.interp(np.arange(ns), np.arange(ns)[~np.isnan(clean_data)], clean_data[~np.isnan(clean_data)])
+
+    """
+    if REVERSED:
+        full_data = - full_data
+        clean_data = - clean_data
+
+    clean_data_full = np.concatenate([beginning_part, clean_data, end_part])
+    ecg['cleandata'] = clean_data_full
+    """
+
+    if self.dataset_intra.selected_channel_index_ecg == 0:
+        self.dataset_intra.cleaned_ecg_left_with_ext = clean_data
+        self.dataset_intra.detected_peaks_left_with_ext = lfp_peak_indices
+        self.dataset_intra.mean_epoch_left_with_ext = mean_epoch
+        self.dataset_intra.epochs_left_with_ext = epochs
+        print("Left channel cleaned")
+
+    elif self.dataset_intra.selected_channel_index_ecg == 1:
+        self.dataset_intra.cleaned_ecg_right_with_ext = clean_data
+        self.dataset_intra.detected_peaks_right_with_ext = lfp_peak_indices
+        self.dataset_intra.mean_epoch_right_with_ext = mean_epoch
+        self.dataset_intra.epochs_right_with_ext = epochs
+        print("Right channel cleaned")
+
+    """
+    # plot the detected peaks
+    self.canvas_detected_peaks_with_ext.setEnabled(True)
+    self.toolbar_detected_peaks_with_ext.setEnabled(True)
+    self.ax_detected_peaks_with_ext.clear()
+    self.ax_detected_peaks_with_ext.set_title('Detected Peaks')
+    if REVERSED:
+        self.ax_detected_peaks_with_ext.plot(- cropped_data, label='Raw ECG')
+        self.ax_detected_peaks_with_ext.plot(final_peaks, - cropped_data[final_peaks], 'ro', label='Detected Peaks')
+        self.canvas_detected_peaks_with_ext.draw()
+    else:
+        self.ax_detected_peaks_with_ext.plot(cropped_data, label='Raw ECG')
+        self.ax_detected_peaks_with_ext.plot(final_peaks, cropped_data[final_peaks], 'ro', label='Detected Peaks')
+        self.canvas_detected_peaks_with_ext.draw()            
+    """
+
+    #plot an overlap of the raw and cleaned data
+    self.canvas_ecg_clean_with_ext.setEnabled(True)
+    self.toolbar_ecg_clean_with_ext.setEnabled(True)
+    self.ax_ecg_clean_with_ext.clear()
+    self.ax_ecg_clean_with_ext.set_title("Cleaned ECG Signal")
+    self.ax_ecg_clean_with_ext.plot(times,full_data, label='Raw data')
+    self.ax_ecg_clean_with_ext.plot(times,clean_data, label='Cleaned data')
+    self.ax_ecg_clean_with_ext.set_xlabel("Time (s)")
+    self.ax_ecg_clean_with_ext.set_ylabel("Amplitude")
+    self.ax_ecg_clean_with_ext.legend()
+    self.canvas_ecg_clean_with_ext.draw()
+
+    self.btn_confirm_cleaning_with_ext.setEnabled(True)  # Enable the button after cleaning
+
+    #######################################################################
+    #########              TEMPLATE SUBSTRACTION METHOD           #########
+    #######################################################################      
+
+
+def start_ecg_cleaning_template_sub(self):
+    """Start the ECG cleaning process using the template substraction method."""
+    if self.dataset_intra.raw_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
+        # Perform the ECG cleaning process here
+        try:
+            clean_ecg_template_sub_no_ext(self)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
+
+def clean_ecg_template_sub_no_ext(self):
+    full_data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
+    times = self.dataset_intra.raw_data.times
+    start_rec = self.dataset_intra.start_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.start_time_right
+    end_rec = self.dataset_intra.end_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.end_time_right
+    sf_lfp= round(self.dataset_intra.raw_data.info['sfreq'])
+    if self.dataset_intra.artifact_polarity == "down":
+        REVERSED = True # true if cardiac artifacts are going downwards
+    else:
+        REVERSED = False
+
+    # crop data to remove sync pulses (amplitude is too big, it messes with template detection)
+    data_crop = full_data[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
+    # keep beginning and end:
+    beginning_part = full_data[:int(start_rec*sf_lfp)]
+    end_part = full_data[int(end_rec*sf_lfp):]
+
+    times_crop = times[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
+    
+    if REVERSED:
+        cropped_data = - data_crop # make sure the artifact is going upward for the detection
+        full_data = - full_data # make sure the artifact is going upward for the detection
+    else:
+        cropped_data = data_crop
+        full_data = full_data
+
+    ecg = {'proc': {}, 'stats': {}, 'cleandata': None, 'detected': False}
+    ns = len(cropped_data)
+    
+    # Segment the signal into overlapping windows
+    dwindow = int(round(sf_lfp))  # 1s window
+    dmove = sf_lfp  # 1s step
+    n_segments = (ns - dwindow) // dmove + 1
+    
+    x = np.array([cropped_data[i * dmove: i * dmove + dwindow] for i in range(n_segments) if i * dmove + dwindow <= ns])
+    
+    detected_peaks = []  # Store peak indices in the original timescale
+    
+    # Loop through each segment and find peaks
+    for i in range(n_segments):
+        segment = x[i]
+        peaks, _ = scipy.signal.find_peaks(segment, height=np.percentile(segment, 90), distance=sf_lfp//2)  # Adjust threshold & min distance
+        real_peaks = peaks + (i * dmove)  # Convert to original timescale
+        detected_peaks.extend(real_peaks)
+
+    detected_peaks = np.array(detected_peaks)
+    
+    # Define epoch window (-0.2s to +0.2s): only keep QRS complex (based on Stam et al., 2023)
+    pre_samples = int(0.2 * sf_lfp)
+    post_samples = int(0.2 * sf_lfp)
+    epoch_length = pre_samples + post_samples  # Total length of each epoch
+
+    epochs = []  # Store extracted heartbeats
+
+    for peak in detected_peaks:
+        start = peak - pre_samples
+        end = peak + post_samples
+        
+        if start >= 0 and end < ns:  # Ensure we don't go out of bounds
+            epochs.append(cropped_data[start:end])
+
+    epochs = np.array(epochs)
+
+    # Compute average heartbeat template
+    mean_epoch = np.mean(epochs, axis=0)
+    ecg['proc']['template1'] = mean_epoch  # First ECG template
+
+    # Plot the detected ECG epochs
+    time = np.linspace(-0.2, 0.2, epoch_length)  # Time in seconds
+
+    self.canvas_ecg_artifact.setEnabled(True)
+    self.ax_ecg_artifact.clear()
+    self.ax_ecg_artifact.set_title("Detected QRS epochs")
+
+    for epoch in epochs:
+        if REVERSED:
+            self.ax_ecg_artifact.plot(time, - epoch, color='gray', alpha=0.1)
+        else: 
+            self.ax_ecg_artifact.plot(time, epoch, color='gray', alpha=0.1)
+    
+    if REVERSED:
+        self.ax_ecg_artifact.plot(time, - mean_epoch, color='black', linewidth=2, label='Average QRS Template')
+    else:
+        self.ax_ecg_artifact.plot(time, mean_epoch, color='black', linewidth=2, label='Average QRS Template')
+    self.ax_ecg_artifact.set_xlabel("Time (s)")
+    self.ax_ecg_artifact.set_ylabel("Amplitude")
+    self.ax_ecg_artifact.legend()
+    self.canvas_ecg_artifact.draw()
+    self.toolbar_ecg_artifact.setEnabled(True)
+
+    # Temporal correlation for ECG detection
+    r = np.correlate(cropped_data, ecg['proc']['template1'], mode='same')
+    threshold = np.percentile(r, 95)
+    detected_peaks, _ = scipy.signal.find_peaks(r, height=threshold)
+
+    ecg['proc']['r'] = r
+    ecg['proc']['thresh'] = threshold
+
+    # Second pass for refining detection
+    refined_template = np.mean([cropped_data[p - pre_samples : p + post_samples] for p in detected_peaks if p - pre_samples > 0 and p + post_samples < ns], axis=0)
+    ecg['proc']['template2'] = refined_template
+    r2 = np.correlate(cropped_data, refined_template, mode='same')
+    threshold2 = np.percentile(r2, self.dataset_intra.ecg_thresh)
+    final_peaks, _ = scipy.signal.find_peaks(r2, height=threshold2, distance=sf_lfp//2)
+
+    ecg['proc']['r2'] = r2
+    ecg['proc']['thresh2'] = threshold2
+
+    # create a short QRS template to be substracted from the signal:
+    # Assuming the R-peak is at the center of the mean_epoch
+    center_idx = len(mean_epoch) // 2  
+
+    # Detect Q-peak (local minimum before R)
+    Q_range = mean_epoch[:center_idx]  # Left side of the R-peak
+    Q_idx = np.argmin(Q_range)  # Q-peak index (minimum value before R)
+
+    # Detect S-peak (local minimum after R)
+    S_range = mean_epoch[center_idx:]  # Right side of the R-peak
+    S_idx = np.argmin(S_range) + center_idx  # Adjust index relative to full epoch
+
+    max_offset = 30  # Maximum samples to check for minimal difference
+
+    Q_window = mean_epoch[Q_idx - max_offset : Q_idx]
+    S_window = mean_epoch[S_idx : S_idx + max_offset]
+    # Find pair (q, s) with smallest absolute difference
+    min_diff = float("inf")
+    start_idx, end_idx = None, None
+
+    for i, q_val in enumerate(Q_window):
+        for j, s_val in enumerate(S_window):
+            diff = abs(q_val - s_val)
+            if diff < min_diff:
+                min_diff = diff
+                start_idx = i
+                end_idx = j
+
+
+    start_idx += Q_idx - max_offset  # Adjust to full epoch index
+    end_idx += S_idx  # Adjust to full epoch index
+
+    if mean_epoch[start_idx] != mean_epoch[end_idx]:
+        higher_value = max(mean_epoch[start_idx], mean_epoch[end_idx])
+        mean_epoch[start_idx] = mean_epoch[end_idx] = higher_value
+
+    complex_qrs_template = mean_epoch[start_idx:end_idx]  # Extract the QRS complex template
+    ecg['proc']['complex_qrs_template'] = complex_qrs_template
+
+    # Define original epoch length
+    original_length = len(mean_epoch)
+
+    # Compute missing samples on both sides
+    missing_left = start_idx  # Samples removed before start_idx
+    missing_right = original_length - end_idx  # Samples removed after end_idx
+
+    # Get common value to extend (the value at start_idx and end_idx are equal)
+    common_value = mean_epoch[start_idx]
+
+    # Extend the refined template with straight tails
+    extended_template = np.concatenate([
+        np.full(missing_left, common_value),  # Left tail
+        mean_epoch[start_idx:end_idx],                     # Main refined template
+        np.full(missing_right, common_value)   # Right tail
+    ])
+
+    #print(len(extended_template))
+    #print(len(refined_template))
+
+    # Ensure the length is correct
+    assert len(extended_template) == original_length, "Length mismatch!"
+
+    # overlap the average QRS template with equal tails onto the original QRS average:
+    if REVERSED:
+        self.ax_ecg_artifact.plot(time, - extended_template, color='purple', linewidth=2, label='Average with equal tails')
+    else : 
+        self.ax_ecg_artifact.plot(time, extended_template, color='purple', linewidth=2, label='Average with equal tails')
+    self.ax_ecg_artifact.legend()
+    self.canvas_ecg_artifact.draw()
+
+    # Estimate HR
+    peak_intervals = np.diff(final_peaks) / sf_lfp  # Convert to seconds
+    hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
+    ecg['stats']['hr'] = hr
+    ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
+    self.label_heart_rate_lfp.setText(f'Heart rate: {hr} bpm')
+
+    # Check ECG detection validity
+    if 55 <= hr <= 120 and len(final_peaks) > 10:
+        ecg['detected'] = True
+    
+    ### HERE ADD A PART TO DISPLAY THE COMPUTED HEART RATE !! ###
+
+    # Copy signal for cleaned output
+    clean_data = np.copy(cropped_data)
+    template = complex_qrs_template
+    template_len = len(template)
+
+    # 1. Find R-peak index in template (highest value for peaks going up, lower value for peaks going down)
+    template_r_idx = np.argmax(template)
+
+    # 2. Prepare design matrix for linear fit (scale + offset)
+    X_template = np.vstack([template, np.ones_like(template)]).T  # Shape: (template_len, 2)
+
+    for peak_idx in final_peaks:
+        # 3. Align R-peak in signal with R-peak in template
+        start = peak_idx - template_r_idx
+        end = start + template_len
+
+        # 4. Check signal boundaries
+        if start < 0 or end > len(cropped_data):
+            continue
+
+        # 5. Extract corresponding signal segment
+        segment = cropped_data[start:end]
+        #plt.plot(segment, label='Segment', color='gray', alpha=0.5)
+        #plt.plot(template, label='Template', color='blue', alpha=0.5)
+
+        # 6. Solve for optimal scale (a) and offset (b) using least squares
+        coeffs, _, _, _ = np.linalg.lstsq(X_template, segment, rcond=None)
+        a, b = coeffs
+
+        # 7. Build fitted template and subtract
+        fitted_template = a * template + b
+        #plt.plot(fitted_template, label='Fitted Template', color='red', alpha=0.5)
+        clean_data[start:end] -= fitted_template
+
+    # Restrore the full signal:
+    if REVERSED:
+        full_data = - full_data
+        clean_data = - clean_data
+
+    clean_data_full = np.concatenate([beginning_part, clean_data, end_part])
+    ecg['cleandata'] = clean_data_full
+
+    if self.dataset_intra.selected_channel_index_ecg == 0:
+        self.dataset_intra.cleaned_ecg_left = clean_data_full
+        self.dataset_intra.detected_peaks_left = final_peaks
+        self.dataset_intra.mean_epoch_left = mean_epoch
+        self.dataset_intra.epochs_left = epochs
+        print("Left channel cleaned")
+
+    elif self.dataset_intra.selected_channel_index_ecg == 1:
+        self.dataset_intra.cleaned_ecg_right = clean_data_full
+        self.dataset_intra.detected_peaks_right = final_peaks
+        self.dataset_intra.mean_epoch_right = mean_epoch
+        self.dataset_intra.epochs_right = epochs
+        print("Right channel cleaned")
+
+    # plot the detected peaks
+    self.canvas_detected_peaks.setEnabled(True)
+    self.toolbar_detected_peaks.setEnabled(True)
+    self.ax_detected_peaks.clear()
+    self.ax_detected_peaks.set_title('Detected Peaks')
+    if REVERSED:
+        self.ax_detected_peaks.plot(- cropped_data, label='Raw ECG')
+        self.ax_detected_peaks.plot(final_peaks, - cropped_data[final_peaks], 'ro', label='Detected Peaks')
+    else:
+        self.ax_detected_peaks.plot(cropped_data, label='Raw ECG')
+        self.ax_detected_peaks.plot(final_peaks, cropped_data[final_peaks], 'ro', label='Detected Peaks')
+    self.canvas_detected_peaks.draw()
+
+    #plot an overlap of the raw and cleaned data
+    self.canvas_ecg_clean.setEnabled(True)
+    self.toolbar_ecg_clean.setEnabled(True)
+    self.ax_ecg_clean.clear()
+    self.ax_ecg_clean.set_title("Cleaned ECG Signal")
+    self.ax_ecg_clean.plot(times,full_data, label='Raw data')
+    self.ax_ecg_clean.plot(times,clean_data_full, label='Cleaned data')
+    self.ax_ecg_clean.set_xlabel("Time (s)")
+    self.ax_ecg_clean.set_ylabel("Amplitude")
+    self.ax_ecg_clean.legend()
+    self.canvas_ecg_clean.draw()
+
+    self.btn_confirm_cleaning.setEnabled(True)  # Enable the button after cleaning         
+        
+
+def start_ecg_cleaning_template_sub_with_ext(self):
+    """Start the ECG cleaning process using the template substraction method."""
+    if self.dataset_intra.synced_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
+        # Perform the ECG cleaning process here
+        try:
+            clean_ecg_template_sub_with_ext(self)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
+
+
+def clean_ecg_template_sub_with_ext(self):
+    #### FIRST STEP: PREDETERMINE R-PEAKS TIMESTAMPS USING ECG CHANNEL ####
+    """ The externally recorded ECG signal was used to predetermine
+    the timestamps of the R-peaks. The ECG signal was z-scored ((x-l)/r) 
+    over the entire recording and the function findpeaks was used to search 
+    for R-peaks with a specific height (at least two and-a-half times 
+    the standard deviation of the entire time series) and at a 
+    specific inter-peak distance (minimally 500 ms). 
+    The algorithm accounts for a negative QRS complex
+    by repeating this procedure after multiplying the signal with
+    1. For both orientations of the LFP signal, the values of the
+    peaks were averaged and the peaks with the highest mean
+    determined the orientation of the QRS complexes, provided
+    that at least the same amount of peaks were detected.
+    """
+    data_extra = self.dataset_extra.synced_data.get_data()[self.dataset_extra.selected_channel_index_ecg]
+    #data_extra_scaled = data_extra * y_max_factor
+    data_extra_scaled = data_extra
+
+
+    # Apply 0.1 Hz-100Hz band-pass filter to ECG data
+    b, a = scipy.signal.butter(1, 0.05, "highpass")
+    detrended_data = scipy.signal.filtfilt(b, a, data_extra_scaled)
+    low_cutoff = 100.0  # Hz
+    b2, a2 = scipy.signal.butter(
+        N=4,  # Filter order
+        Wn=low_cutoff,
+        btype="lowpass",
+        fs=self.dataset_extra.sf 
+    )
+    ecg_data = scipy.signal.filtfilt(b2, a2, detrended_data)
+    timescale_extra = np.linspace(0, self.dataset_extra.synced_data.get_data().shape[1]/self.dataset_extra.sf, self.dataset_extra.synced_data.get_data().shape[1])
+
+    # 1. Z-score the ECG signal
+    ecg_z = (ecg_data - np.mean(ecg_data)) / np.std(ecg_data)
+
+    # 2. Define peak detection params
+    threshold = 2.5  # 2.5 * std (signal is already z-scored)
+    min_distance_samples = int(0.5 * self.dataset_extra.sf)  # 500 ms in samples
+
+    # 3. Detect peaks in original signal
+    peaks_pos, props_pos = scipy.signal.find_peaks(
+        ecg_z,
+        height=threshold,
+        distance=min_distance_samples
+    )
+
+    # 4. Detect peaks in inverted signal
+    peaks_neg, props_neg = scipy.signal.find_peaks(
+        -ecg_z,
+        height=threshold,
+        distance=min_distance_samples
+    )
+
+    # 5. Compare polarity by mean peak amplitude
+    mean_pos = np.mean(props_pos['peak_heights']) if len(peaks_pos) > 0 else 0
+    mean_neg = np.mean(props_neg['peak_heights']) if len(peaks_neg) > 0 else 0
+
+    # 6. Select better polarity (also check similar number of peaks)
+    #if len(peaks_pos) >= len(peaks_neg):
+    if mean_pos >= mean_neg:
+        chosen_peaks = peaks_pos
+        orientation = 'positive'
+    else:
+        chosen_peaks = peaks_neg
+        orientation = 'negative'        
+    print(f"peaks orientation in the ecg channel: {orientation}")
+    #### Plot the detected peaks ####
+    self.canvas_detected_peaks_with_ext.setEnabled(True)
+    self.toolbar_detected_peaks_with_ext.setEnabled(True)
+    self.ax_detected_peaks_with_ext.clear()
+    self.ax_detected_peaks_with_ext.set_title('Detected Peaks')
+    self.ax_detected_peaks_with_ext.plot(timescale_extra, ecg_data, label='Raw ECG', alpha=0.1)
+    self.ax_detected_peaks_with_ext.plot(timescale_extra[chosen_peaks], ecg_data[chosen_peaks], 'ro', label='Detected Peaks', alpha=0.1)
+    self.canvas_detected_peaks_with_ext.draw()
+
+
+    #### SECOND STEP: FIND CORRESPONDING R-PEAKS IN THE LFP SIGNAL ####
+    """ Subsequently, the LFP signal was searched for peaks using
+    numpy functions min and max in a window of 20 samples
+    prior and after the R-peaks found in the ECG signal. This
+    window was adopted in order to account for inaccuracies
+    in the synchronization of the LFP- and ECG signals. The absolute 
+    values of the peaks found with min and max were averaged and the peaks
+    with the highest absolute mean determined the orientation of the QRS 
+    complexes.
+    """
+
+    full_data = self.dataset_intra.synced_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
+    times = np.linspace(0, self.dataset_intra.synced_data.get_data().shape[1]/self.dataset_intra.sf, self.dataset_intra.synced_data.get_data().shape[1])
+    
+    """
+    For each ECG R-peak, search for LFP peaks (min and max) in ±20 LFP samples.
+    """
+    # Convert R-peaks from ECG samples to seconds
+    r_peak_times_sec = chosen_peaks / self.dataset_extra.sf
+
+    # Convert times to LFP sample indices
+    r_peaks_lfp_idx = np.round(r_peak_times_sec * self.dataset_intra.sf).astype(int)
+    print(len(r_peaks_lfp_idx)) # sub017 DBS ON Left = 1685
+
+    window = 20  # ±20 LFP samples
+    max_peaks = []
+    min_peaks = []
+
+    for idx in r_peaks_lfp_idx:
+        start = max(idx - window, 0)
+        end = min(idx + window + 1, len(full_data) -1 )
+        segment = full_data[start:end]
+
+        #if len(segment) > 0:  # will need to be refined for robustness to NaN values
+        if segment.size:
+            max_peaks.append(np.nanmax(segment))
+            min_peaks.append(np.nanmin(segment))
+
+    # Calculate mean absolute values
+    mean_abs_max = np.nanmean(np.abs(max_peaks)) if max_peaks else 0
+    print(mean_abs_max)
+    mean_abs_min = np.nanmean(np.abs(min_peaks)) if min_peaks else 0
+    print(mean_abs_min)
+
+    # Choose the orientation with the higher mean absolute amplitude
+    lfp_peak_indices = []
+    polarity = None
+    if mean_abs_max >= mean_abs_min:
+        polarity = 'positive'
+        print(f"peaks polarity in the LFP channel: {polarity}")
+        for idx in r_peaks_lfp_idx:
+            start = max(idx - window, 0)
+            end = min(idx + window + 1, len(full_data)-1)
+            segment = full_data[start:end]
+            #if len(segment) > 0:
+            if segment.size:
+                local_max_idx = np.nanargmax(segment) 
+                peak_global_idx = start + local_max_idx
+                lfp_peak_indices.append(peak_global_idx)
+    else:
+        polarity = 'negative'
+        print(f"peaks polarity in the LFP channel: {polarity}")
+        for idx in r_peaks_lfp_idx:
+            start = max(idx - window, 0)
+            end = min(idx + window + 1, len(full_data)-1)
+            segment = full_data[start:end]
+            #if len(segment) > 0:
+            if segment.size:
+                local_min_idx = np.nanargmin(segment) 
+                peak_global_idx = start + local_min_idx
+                lfp_peak_indices.append(peak_global_idx)
+
+    #### Plot the detected peaks ####
+    #self.canvas_detected_peaks_with_ext.setEnabled(True)
+    #self.toolbar_detected_peaks_with_ext.setEnabled(True)
+    #self.ax_detected_peaks_with_ext.clear()
+    #self.ax_detected_peaks_with_ext.set_title('Detected Peaks')
+    self.ax_detected_peaks_with_ext.plot(times, full_data, label='Raw LFP', color='black')
+    self.ax_detected_peaks_with_ext.plot(np.array(times)[lfp_peak_indices], np.array(full_data)[lfp_peak_indices], 'ro', label='LFP Peaks')
+    self.ax_detected_peaks_with_ext.legend()
+    self.canvas_detected_peaks_with_ext.draw()        
+
+
+    # Create a QRS template #
+    # Define epoch window (-0.2s to +0.2s): only keep QRS complex (based on Stam et al., 2023)
+    pre_samples = int(0.2 * self.dataset_intra.sf)
+    post_samples = int(0.2 * self.dataset_intra.sf)
+    epoch_length = pre_samples + post_samples  # Total length of each epoch
+
+    epochs = []  # Store extracted heartbeats
+
+    # avoid beginning and end of the recording to compute the average QRS template (because of the sync pulses):
+    # remove first and last minute just to be sure:
+    after_pulse = 60 * self.dataset_intra.sf
+    before_last_pulse = (times[-1] - 60) * self.dataset_intra.sf
+
+    for peak in lfp_peak_indices:
+        start = peak - pre_samples
+        end = peak + post_samples
+        
+        #if start >= 0 and end < len(full_data):  # Ensure we don't go out of bounds
+        if start >= after_pulse and end < before_last_pulse:
+            epochs.append(full_data[start:end])
+
+    epochs = np.array(epochs)
+
+    # Compute average QRS template
+    mean_epoch = np.nanmean(epochs, axis=0)
+    #ecg['proc']['template1'] = mean_epoch  # First ECG template
+
+    # Plot the detected ECG epochs
+    time = np.linspace(-0.2, 0.2, epoch_length)  # Time in seconds
+
+    self.canvas_ecg_artifact_with_ext.setEnabled(True)
+    self.toolbar_ecg_artifact_with_ext.setEnabled(True)
+    self.ax_ecg_artifact_with_ext.clear()
+    self.ax_ecg_artifact_with_ext.set_title("Detected QRS epochs")
+
+    for epoch in epochs:
+        self.ax_ecg_artifact_with_ext.plot(time, epoch, color='gray', alpha=0.3)
+    
+    self.ax_ecg_artifact_with_ext.plot(time, mean_epoch, color='black', linewidth=2, label='Average QRS Template')
+    self.ax_ecg_artifact_with_ext.set_xlabel("Time (s)")
+    self.ax_ecg_artifact_with_ext.set_ylabel("Amplitude")
+    self.ax_ecg_artifact_with_ext.legend()
+    self.canvas_ecg_artifact_with_ext.draw()
+    ####################################################################
+    # create a short QRS template to be substracted from the signal:
+    # Assuming the R-peak is at the center of the mean_epoch
+    center_idx = len(mean_epoch) // 2  
+    # Detect Q-peak (local minimum before R)
+    Q_range = mean_epoch[center_idx-25:center_idx]  # Left side of the R-peak (100ms before)
+    if polarity == 'negative': 
+        reversed_idx = np.nanargmax(Q_range[::-1])
+        Q_idx = center_idx - 1 - reversed_idx
+    elif polarity == 'positive':
+        reversed_idx = np.nanargmin(Q_range[::-1])   # Q-peak index (minimum value before R)
+        Q_idx = center_idx - 1 - reversed_idx  
+
+    # Detect S-peak (local minimum after R)
+    S_range = mean_epoch[center_idx: center_idx+25]  # Right side of the R-peak (100ms after)
+    if polarity == 'negative':
+        S_idx = np.nanargmax(S_range) + center_idx
+    elif polarity == 'positive':
+        S_idx = np.nanargmin(S_range) + center_idx  # Adjust index relative to full epoch
+    
+    max_offset = 30  # Maximum samples to check for minimal difference
+
+    # Define the left tail: from beginning of epoch up# to Q-peak (max 30 samples)
+    left_tail_end = min(Q_idx, max_offset)
+    Q_window = mean_epoch[:left_tail_end]
+    #left_tail_start = max(0, Q_idx - max_offset)
+    #Q_window = mean_epoch[left_tail_start:Q_idx]
+
+    # Define the right tail: from S-peak to end of epoch (max 30 samples)
+    right_tail_start = max(S_idx + 1, len(mean_epoch) - max_offset)
+    S_window = mean_epoch[right_tail_start:]
+    #right_tail_end = min(S_idx + 30, len(mean_epoch)-1)
+    #S_window = mean_epoch[S_idx:right_tail_end]
+
+    # Search for the pair (i, j) with the smallest absolute difference
+    #best_i, best_j = 0, len(mean_epoch) - 1
+
+    #Q_window = mean_epoch[Q_idx - max_offset : Q_idx]
+    #S_window = mean_epoch[S_idx : S_idx + max_offset]
+    #Q_window = mean_epoch[0: max_offset]
+    #S_window = mean_epoch[len(mean_epoch) - max_offset : len(mean_epoch)-1]
+    # Find pair (q, s) with smallest absolute difference
+    min_diff = float("inf")
+    start_idx, end_idx = None, None
+
+    for i, q_val in enumerate(Q_window):
+        for j, s_val in enumerate(S_window):
+            diff = abs(q_val - s_val)
+            if diff < min_diff:
+                min_diff = diff
+                start_idx = i
+                end_idx = j + right_tail_start  # Adjust index relative to full epoch
+                #end_idx = j + S_idx
+
+    #start_idx += Q_idx - max_offset  # Adjust to full epoch index
+    #end_idx += S_idx  # Adjust to full epoch index
+    #end_idx += (len(mean_epoch) - max_offset)
+
+    if mean_epoch[start_idx] != mean_epoch[end_idx]:
+        higher_value = max(mean_epoch[start_idx], mean_epoch[end_idx])
+        mean_epoch[start_idx] = mean_epoch[end_idx] = higher_value
+
+    complex_qrs_template = mean_epoch[start_idx:end_idx]  # Extract the QRS complex template
+
+    #ecg['proc']['complex_qrs_template'] = complex_qrs_template
+
+    # Define original epoch length
+    original_length = len(mean_epoch)
+
+    # Compute missing samples on both sides
+    missing_left = start_idx  # Samples removed before start_idx
+    missing_right = original_length - end_idx  # Samples removed after end_idx
+
+    # Get common value to extend (the value at start_idx and end_idx are equal)
+    common_value = mean_epoch[start_idx]
+
+    # Extend the refined template with straight tails
+    extended_template = np.concatenate([
+        np.full(missing_left, common_value),  # Left tail
+        mean_epoch[start_idx:end_idx],                     # Main refined template
+        np.full(missing_right, common_value)   # Right tail
+    ])
+
+
+    # Ensure the length is correct
+    assert len(extended_template) == original_length, "Length mismatch!"
+
+    # overlap the average QRS template with equal tails onto the original QRS average:
+    self.ax_ecg_artifact_with_ext.plot(time, extended_template, color='purple', linewidth=2, label='Average with equal tails')
+    self.ax_ecg_artifact_with_ext.legend()
+    self.canvas_ecg_artifact_with_ext.draw()
+
+    # Estimate HR
+    peak_intervals = np.diff(lfp_peak_indices) / self.dataset_intra.sf  # Convert to seconds
+    hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
+    #ecg['stats']['hr'] = hr
+    #ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
+    self.label_heart_rate_lfp_with_ext.setText(f'Heart rate: {hr} bpm')
+
+    # Copy signal for cleaned output
+    clean_data = np.copy(full_data)
+    template = complex_qrs_template
+    template_len = len(template)
+    #print(template_len)
+
+    # 1. Find R-peak index in template (highest value for peaks going up, lower value for peaks going down)
+    if polarity == 'positive':
+        template_r_idx = np.argmax(template)
+    elif polarity == 'negative':
+        template_r_idx = np.argmin(template)
+
+    # 2. Prepare design matrix for linear fit (scale + offset)
+    X_template = np.vstack([template, np.ones_like(template)]).T  # Shape: (template_len, 2)
+
+    for peak_idx in lfp_peak_indices:
+        # 3. Align R-peak in signal with R-peak in template
+        start = peak_idx - template_r_idx
+        end = start + template_len
+
+        # 4. Check signal boundaries
+        if start < 0 or end > len(full_data):
+            continue
+
+        # 5. Extract corresponding signal segment
+        segment = full_data[start:end]
+
+        # 6. Solve for optimal scale (a) and offset (b) using least squares
+        coeffs, _, _, _ = np.linalg.lstsq(X_template, segment, rcond=None)
+        a, b = coeffs
+
+        # 7. Build fitted template and subtract
+        fitted_template = a * template + b
+        
+        clean_data[start:end] -= fitted_template
+
+
+    if self.dataset_intra.selected_channel_index_ecg == 0:
+        self.dataset_intra.cleaned_ecg_left = clean_data
+        self.dataset_intra.detected_peaks_left = lfp_peak_indices
+        self.dataset_intra.mean_epoch_left = mean_epoch
+        self.dataset_intra.epochs_left = epochs
+        print("Left channel cleaned")
+
+    elif self.dataset_intra.selected_channel_index_ecg == 1:
+        self.dataset_intra.cleaned_ecg_right = clean_data
+        self.dataset_intra.detected_peaks_right = lfp_peak_indices
+        self.dataset_intra.mean_epoch_right = mean_epoch
+        self.dataset_intra.epochs_right = epochs
+        print("Right channel cleaned")
+
+    
+    # plot an overlap of the raw and cleaned data
+    self.canvas_ecg_clean_with_ext.setEnabled(True)
+    self.toolbar_ecg_clean_with_ext.setEnabled(True)
+    self.ax_ecg_clean_with_ext.clear()
+    self.ax_ecg_clean_with_ext.set_title("Cleaned ECG Signal")
+    self.ax_ecg_clean_with_ext.plot(times,full_data, label='Raw data')
+    self.ax_ecg_clean_with_ext.plot(times,clean_data, label='Cleaned data')
+    self.ax_ecg_clean_with_ext.set_xlabel("Time (s)")
+    self.ax_ecg_clean_with_ext.set_ylabel("Amplitude")
+    self.ax_ecg_clean_with_ext.legend()
+    self.canvas_ecg_clean_with_ext.draw()
+    
+
+    self.btn_confirm_cleaning_with_ext.setEnabled(True)  # Enable the button after cleaning            
+
+
+    #######################################################################
+    #########          SINGULAR VALUE DECOMPOSITION METHOD        #########
+    #######################################################################      
+
+def start_ecg_cleaning_svd_with_ext(self):
+    """Start the ECG cleaning process using Singular Value Decomposition method."""
+    if self.dataset_intra.raw_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
+        # Perform the ECG cleaning process here
+        try:
+            clean_ecg_svd_with_ext(self)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
+
+
+def clean_ecg_svd_with_ext(self):
+    data_extra = self.dataset_extra.synced_data.get_data()[self.dataset_extra.selected_channel_index_ecg]
+    #data_extra_scaled = data_extra * y_max_factor
+    data_extra_scaled = data_extra
+
+    # Apply 0.1 Hz-100Hz band-pass filter to ECG data
+    b, a = scipy.signal.butter(1, 0.05, "highpass")
+    detrended_data = scipy.signal.filtfilt(b, a, data_extra_scaled)
+    low_cutoff = 100.0  # Hz
+    b2, a2 = scipy.signal.butter(
+        N=4,  # Filter order
+        Wn=low_cutoff,
+        btype="lowpass",
+        fs=self.dataset_extra.sf 
+    )
+    ecg_data = scipy.signal.filtfilt(b2, a2, detrended_data)
+    timescale_extra = np.linspace(0, self.dataset_extra.synced_data.get_data().shape[1]/self.dataset_extra.sf, self.dataset_extra.synced_data.get_data().shape[1])
+
+    # 1. Z-score the ECG signal
+    ecg_z = (ecg_data - np.mean(ecg_data)) / np.std(ecg_data)
+
+    # 2. Define peak detection params
+    threshold = 2.5  # 2.5 * std (signal is already z-scored)
+    min_distance_samples = int(0.5 * self.dataset_extra.sf)  # 500 ms in samples
+
+    # 3. Detect peaks in original signal
+    peaks_pos, props_pos = scipy.signal.find_peaks(
+        ecg_z,
+        height=threshold,
+        distance=min_distance_samples
+    )
+
+    # 4. Detect peaks in inverted signal
+    peaks_neg, props_neg = scipy.signal.find_peaks(
+        -ecg_z,
+        height=threshold,
+        distance=min_distance_samples
+    )
+
+    # 5. Compare polarity by mean peak amplitude
+    mean_pos = np.mean(props_pos['peak_heights']) if len(peaks_pos) > 0 else 0
+    mean_neg = np.mean(props_neg['peak_heights']) if len(peaks_neg) > 0 else 0
+
+    # 6. Select better polarity (also check similar number of peaks)
+    #if len(peaks_pos) >= len(peaks_neg):
+    if mean_pos >= mean_neg:
+        chosen_peaks = peaks_pos
+        orientation = 'positive'
+    else:
+        chosen_peaks = peaks_neg
+        orientation = 'negative'        
+    print(f"peaks orientation in the ecg channel: {orientation}")
+    #### Plot the detected peaks ####
+    self.canvas_detected_peaks_with_ext.setEnabled(True)
+    self.toolbar_detected_peaks_with_ext.setEnabled(True)
+    self.ax_detected_peaks_with_ext.clear()
+    self.ax_detected_peaks_with_ext.set_title('Detected Peaks')
+    self.ax_detected_peaks_with_ext.plot(timescale_extra, ecg_data, label='Raw ECG', alpha=0.1)
+    self.ax_detected_peaks_with_ext.plot(timescale_extra[chosen_peaks], ecg_data[chosen_peaks], 'ro', label='Detected Peaks', alpha=0.1)
+    self.canvas_detected_peaks_with_ext.draw()
+
+    #### SECOND STEP: FIND CORRESPONDING R-PEAKS IN THE LFP SIGNAL ####
+    """ Subsequently, the LFP signal was searched for peaks using
+    numpy functions min and max in a window of 20 samples
+    prior and after the R-peaks found in the ECG signal. This
+    window was adopted in order to account for inaccuracies
+    in the synchronization of the LFP- and ECG signals. The absolute 
+    values of the peaks found with min and max were averaged and the peaks
+    with the highest absolute mean determined the orientation of the QRS 
+    complexes.
+    """
+
+    full_data = self.dataset_intra.synced_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
+    times = np.linspace(0, self.dataset_intra.synced_data.get_data().shape[1]/self.dataset_intra.sf, self.dataset_intra.synced_data.get_data().shape[1])
+    
+    """
+    For each ECG R-peak, search for LFP peaks (min and max) in ±20 LFP samples.
+    """
+    # Convert R-peaks from ECG samples to seconds
+    r_peak_times_sec = chosen_peaks / self.dataset_extra.sf
+
+    # Convert times to LFP sample indices
+    r_peaks_lfp_idx = np.round(r_peak_times_sec * self.dataset_intra.sf).astype(int)
+    print(len(r_peaks_lfp_idx)) # sub017 DBS ON Left = 1685
+
+    window = 20  # ±20 LFP samples
+    max_peaks = []
+    min_peaks = []
+
+    for idx in r_peaks_lfp_idx:
+        start = max(idx - window, 0)
+        end = min(idx + window + 1, len(full_data) -1 )
+        segment = full_data[start:end]
+
+        #if len(segment) > 0:  # will need to be refined for robustness to NaN values
+        if segment.size:
+            max_peaks.append(np.nanmax(segment))
+            min_peaks.append(np.nanmin(segment))
+
+    # Calculate mean absolute values
+    mean_abs_max = np.nanmean(np.abs(max_peaks)) if max_peaks else 0
+    print(mean_abs_max)
+    mean_abs_min = np.nanmean(np.abs(min_peaks)) if min_peaks else 0
+    print(mean_abs_min)
+
+    # Choose the orientation with the higher mean absolute amplitude
+    lfp_peak_indices = []
+    polarity = None
+    if mean_abs_max >= mean_abs_min:
+        polarity = 'positive'
+        print(f"peaks polarity in the LFP channel: {polarity}")
+        for idx in r_peaks_lfp_idx:
+            start = max(idx - window, 0)
+            end = min(idx + window + 1, len(full_data)-1)
+            segment = full_data[start:end]
+            #if len(segment) > 0:
+            if segment.size:
+                local_max_idx = np.nanargmax(segment) 
+                peak_global_idx = start + local_max_idx
+                lfp_peak_indices.append(peak_global_idx)
+    else:
+        polarity = 'negative'
+        print(f"peaks polarity in the LFP channel: {polarity}")
+        for idx in r_peaks_lfp_idx:
+            start = max(idx - window, 0)
+            end = min(idx + window + 1, len(full_data)-1)
+            segment = full_data[start:end]
+            #if len(segment) > 0:
+            if segment.size:
+                local_min_idx = np.nanargmin(segment) 
+                peak_global_idx = start + local_min_idx
+                lfp_peak_indices.append(peak_global_idx)
+
+    self.ax_detected_peaks_with_ext.plot(times, full_data, label='Raw LFP', color='black')
+    self.ax_detected_peaks_with_ext.plot(np.array(times)[lfp_peak_indices], np.array(full_data)[lfp_peak_indices], 'ro', label='LFP Peaks')
+    self.ax_detected_peaks_with_ext.legend()
+    self.canvas_detected_peaks_with_ext.draw()        
+
+    # Estimate HR
+    peak_intervals = np.diff(lfp_peak_indices) / self.dataset_intra.sf  # Convert to seconds
+    hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
+    #ecg['stats']['hr'] = hr
+    #ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
+    self.label_heart_rate_lfp_with_ext.setText(f'Heart rate: {hr} bpm')
+
+    # Create a QRS template #
+    # Define epoch window (-0.2s to +0.2s): only keep QRS complex (based on Stam et al., 2023)
+    pre_samples = int(0.2 * self.dataset_intra.sf)
+    post_samples = int(0.2 * self.dataset_intra.sf)
+    epoch_length = pre_samples + post_samples  # Total length of each epoch
+
+    epochs = []  # Store extracted heartbeats
+
+    # avoid beginning and end of the recording to compute the average QRS template (because of the sync pulses):
+    # remove first and last minute just to be sure:
+    after_pulse = 60 * self.dataset_intra.sf
+    before_last_pulse = (times[-1] - 60) * self.dataset_intra.sf
+
+    lfp_peak_indices_filtered = []
+
+    for peak in lfp_peak_indices:
+        start = peak - pre_samples
+        end = peak + post_samples
+        
+        #if start >= 0 and end < len(full_data):  # Ensure we don't go out of bounds
+        if start >= after_pulse and end < before_last_pulse:
+            epochs.append(full_data[start:end])
+            lfp_peak_indices_filtered.append(peak)
+
+    epochs = np.array(epochs)    # shape: (n timepoints, n epochs)
+
+    ######### SINGULAR VALUE DECOMPOSITION ################
+    X = epochs.T                        # shape: (n epochs, n timepoints)
+    U, S, Vh = np.linalg.svd(X, full_matrices=False)
+
+    # only use SVD1 (therefore index 0): CAN BE MODIFIED LATER
+    reconstructed = np.outer(U[:, 0], S[0] * Vh[0, :]).T   # shape (n epochs, n timepoints)
+
+    # using different SVD: example with SVD2:
+    #SVD_components = {}
+    #SVD_level = 2
+    #comps = [1,2,3,4]
+    #for i in range(len(comps)):
+    #    SVD = U[:, :comps[i]] @ np.diag(S[:comps[i]]) @ Vh[:comps[i], :]
+    #    SVD_components[i] = SVD
+
+    #reconstructed = SVD_components[1].T
+
+    all_complex_svd_templates = []
+    all_complex_offset_svd_templates = []
+
+    max_sample = 30 # tail with 30 samples max
+    self.ax_ecg_artifact_with_ext.clear()
+    for r in reconstructed:
+        left_tail = r[0:max_sample]
+        right_tail_start = (len(r)-1) - max_sample
+        right_tail = r[right_tail_start:]
+        min_diff = float("inf")
+        start_idx, end_idx = None, None
+
+        for i, q_val in enumerate(left_tail):
+            for j, s_val in enumerate(right_tail):
+                diff = abs(q_val - s_val)
+                if diff < min_diff:
+                    min_diff = diff
+                    start_idx = i
+                    end_idx = j + right_tail_start
+        
+        if r[start_idx] != r[end_idx]:
+            higher_value = max(r[start_idx], r[end_idx])
+            r[start_idx] = r[end_idx] = higher_value
+
+        svd_template = r[start_idx:end_idx]
+        all_complex_svd_templates.append(svd_template)
+        offset_svd_template = svd_template - r[start_idx]
+        all_complex_offset_svd_templates.append(offset_svd_template)
+        timescale_template = np.linspace(0, len(all_complex_svd_templates[0])/self.dataset_intra.sf, len(all_complex_svd_templates[0]))
+        self.ax_ecg_artifact_with_ext.plot(timescale_template, offset_svd_template, color='lightgrey')
+    
+    mean_svd_template = np.mean(np.array(all_complex_offset_svd_templates), axis=0)
+    self.ax_ecg_artifact_with_ext.plot(timescale_template, mean_svd_template, color = 'black', label = 'average SVD across epochs')
+    self.ax_ecg_artifact_with_ext.set_xlabel("Time (s)")
+    self.ax_ecg_artifact_with_ext.set_ylabel("Amplitude")
+    self.ax_ecg_artifact_with_ext.legend()
+    self.canvas_ecg_artifact_with_ext.draw()
+
+
+    clean_data = np.copy(full_data)
+
+    for i, peak_idx in enumerate(lfp_peak_indices_filtered):
+        # load the template corresponding to that specific peak:
+        template = all_complex_svd_templates[i]
+        svd_template_len = len(template)
+        
+        # 3. Align R-peak in signal with R-peak in template
+        svd_template_r_idx = np.argmax(template) if polarity == 'positive' else np.argmin(template)
+        start = peak_idx - svd_template_r_idx
+        end = start + svd_template_len
+
+        # 2. Prepare design matrix for linear fit (scale + offset)
+        X_template = np.vstack([template, np.ones_like(template)]).T  # Shape: (template_len, 2)
+
+        # 4. Check signal boundaries
+        if start < 0 or end > len(full_data):
+            continue
+
+        # 5. Extract corresponding signal segment
+        segment = full_data[start:end]
+
+        # 6. Solve for optimal scale (a) and offset (b) using least squares
+        coeffs, _, _, _ = np.linalg.lstsq(X_template, segment, rcond=None)
+        a, b = coeffs
+
+        # 7. Build fitted template and subtract
+        #fitted_template = a * template + b
+        fitted_template = template + b # ONLY CHANGES THE OFFSET, LEAVES THE SCALING INTACT !!
+        if i == 1:
+            plt.plot(segment, label = 'original segment')
+            plt.plot(fitted_template, label = 'fitted_template')
+        
+        clean_data[start:end] -= fitted_template
+
+    if self.dataset_intra.selected_channel_index_ecg == 0:
+        self.dataset_intra.cleaned_ecg_left = clean_data
+        self.dataset_intra.detected_peaks_left = lfp_peak_indices
+        #self.dataset_intra.epochs_left = epochs
+        print("Left channel cleaned")
+
+    elif self.dataset_intra.selected_channel_index_ecg == 1:
+        self.dataset_intra.cleaned_ecg_right = clean_data
+        self.dataset_intra.detected_peaks_right = lfp_peak_indices
+        #self.dataset_intra.epochs_right = epochs
+        print("Right channel cleaned")
+
+    
+    # plot an overlap of the raw and cleaned data
+    self.canvas_ecg_clean_with_ext.setEnabled(True)
+    self.toolbar_ecg_clean_with_ext.setEnabled(True)
+    self.ax_ecg_clean_with_ext.clear()
+    self.ax_ecg_clean_with_ext.set_title("Cleaned ECG Signal")
+    self.ax_ecg_clean_with_ext.plot(times,full_data, label='Raw data')
+    self.ax_ecg_clean_with_ext.plot(times,clean_data, label='Cleaned data')
+    self.ax_ecg_clean_with_ext.set_xlabel("Time (s)")
+    self.ax_ecg_clean_with_ext.set_ylabel("Amplitude")
+    self.ax_ecg_clean_with_ext.legend()
+    self.canvas_ecg_clean_with_ext.draw()
+    
+
+    self.btn_confirm_cleaning_with_ext.setEnabled(True)  # Enable the button after cleaning            
+

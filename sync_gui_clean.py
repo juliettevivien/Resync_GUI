@@ -8,7 +8,6 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.backend_bases import MouseButton
 import matplotlib.pyplot as plt
-import mne
 from mne.io import read_raw_fieldtrip  # Import necessary functions
 from mnelab.io.readers import read_raw
 from os.path import join, basename, dirname, exists
@@ -16,19 +15,58 @@ from pyxdf import resolve_streams
 import scipy
 from scipy.io import savemat
 import numpy as np
-import pandas as pd
-from copy import deepcopy
-import pickle
+
 import webbrowser
+from functools import partial
 
 # import modules
-from pyxdftools.xdfdata import XdfData
-from functions.tmsi_poly5reader import Poly5Reader
-from functions.io import write_set
-from functions.find_artifacts import (
-    find_external_sync_artifact
-)
 
+from functions.tmsi_poly5reader import Poly5Reader
+from functions.io import (
+    select_saving_folder,
+    load_mat_file,
+    load_ext_file,
+    save_datasets_as_set,
+    synchronize_datasets_as_pickles,
+    synchronize_datasets_as_one_pickle,
+    synchronize_datasets_as_mat
+    )
+from functions.find_artifacts import (
+    detect_artifacts_intra,
+    manual_selection_intra,
+    detect_artifacts_external,
+    manual_selection_external
+)
+from functions.interactive import (
+    prompt_channel_name_intra,
+    select_channel_extra,
+    select_ecg_channel_to_compute_hr_external,
+    select_last_artifact_intra,
+    select_last_artifact_extra
+    )
+from functions.plotting import (
+    plot_channel_intra,
+    plot_channel_extra,
+    plot_synced_channels,
+    plot_overlapped_channels_ecg,
+    plot_scatter_channel_extra_sf,
+    plot_scatter_channel_intra_sf
+    )
+from functions.timeshift import (
+    compute_timeshift, 
+    compute_eff_sf,
+    select_first_artifact_intra_eff_sf_correction,
+    select_last_artifact_intra_eff_sf_correction,
+    select_first_artifact_extra_eff_sf_correction,
+    select_last_artifact_extra_eff_sf_correction
+    )
+from functions.ecg_cleaning import (
+    start_ecg_cleaning_interpolation,
+    start_ecg_cleaning_interpolation_with_ext,
+    start_ecg_cleaning_template_sub,
+    start_ecg_cleaning_template_sub_with_ext,
+    start_ecg_cleaning_svd_with_ext
+)
 
 
 class DataSet:
@@ -123,7 +161,7 @@ class SyncGUI(QMainWindow):
         self.btn_timeshift = Button("Timeshift Analysis", "#cd9ddc")
         self.btn_timeshift.clicked.connect(self.show_timeshift_page)
         self.btn_effective_sf = Button("Effective Sampling Frequency correction", "#cd9ddc")
-        self.btn_effective_sf.clicked.connect(self.show_effective_sf_page)
+        self.btn_effective_sf.clicked.connect(partial(self.show_effective_sf_page))
         self.btn_ecg_no_ext = Button("ECG Cleaning - no ext", "#cd9ddc")
         self.btn_ecg_no_ext.clicked.connect(self.show_ecg_no_ext_page)
         self.btn_ecg_with_ext = Button("ECG Cleaning - with ext", "#cd9ddc")
@@ -224,7 +262,7 @@ class SyncGUI(QMainWindow):
 
         # Create a button to select the folder where to save the results
         self.btn_select_folder = Button("Select folder to save results", "lightyellow")
-        self.btn_select_folder.clicked.connect(self.select_folder)
+        self.btn_select_folder.clicked.connect(partial(select_saving_folder, self))
         saving_folder_layout.addWidget(self.btn_select_folder)
 
         self.label_saving_folder = QLabel("No saving folder selected")
@@ -241,17 +279,17 @@ class SyncGUI(QMainWindow):
 
         self.btn_sync_as_set = Button("separately as .SET files", "lightyellow")
         self.btn_sync_as_set.setEnabled(False)
-        self.btn_sync_as_set.clicked.connect(self.save_datasets_as_set)
+        self.btn_sync_as_set.clicked.connect(partial(save_datasets_as_set, self))
         saving_xdf_layout.addWidget(self.btn_sync_as_set)
 
         self.btn_sync_as_pickle = Button("separately as .pkl files", "lightyellow")
         self.btn_sync_as_pickle.setEnabled(False)
-        self.btn_sync_as_pickle.clicked.connect(self.synchronize_datasets_as_pickles)
+        self.btn_sync_as_pickle.clicked.connect(partial(synchronize_datasets_as_pickles, self))
         saving_xdf_layout.addWidget(self.btn_sync_as_pickle)
 
         self.btn_all_as_pickle = Button("all as one .pkl", "lightyellow")
         self.btn_all_as_pickle.setEnabled(False)
-        self.btn_all_as_pickle.clicked.connect(self.synchronize_datasets_as_one_pickle)
+        self.btn_all_as_pickle.clicked.connect(partial(synchronize_datasets_as_one_pickle, self))
         saving_xdf_layout.addWidget(self.btn_all_as_pickle)
 
         main_layout.addLayout(saving_xdf_layout)
@@ -264,7 +302,7 @@ class SyncGUI(QMainWindow):
 
         self.btn_sync_as_mat = Button("separately as .mat files", "lightyellow")
         self.btn_sync_as_mat.setEnabled(False)
-        self.btn_sync_as_mat.clicked.connect(self.synchronize_datasets_as_mat)
+        self.btn_sync_as_mat.clicked.connect(partial(synchronize_datasets_as_mat, self))
         saving_poly5_layout.addWidget(self.btn_sync_as_mat)
 
         self.btn_sync_as_pickle_from_poly5 = Button("separately as .pkl files", "lightyellow")
@@ -287,7 +325,7 @@ class SyncGUI(QMainWindow):
 
         # File selection button for intracranial
         self.btn_load_file_intra = Button("Load intracranial file (supported format: .mat)", "lightblue")
-        self.btn_load_file_intra.clicked.connect(self.load_mat_file)
+        self.btn_load_file_intra.clicked.connect(partial(load_mat_file, self))
         layout.addWidget(self.btn_load_file_intra)
 
         # Create a label to display the selected file name
@@ -314,7 +352,7 @@ class SyncGUI(QMainWindow):
         # Channel selection button for intracranial file (Initially hidden)
         self.btn_select_channel_intra = Button("Select Channel", "lightblue")
         self.btn_select_channel_intra.setEnabled(False)  # Initially inactive
-        self.btn_select_channel_intra.clicked.connect(self.prompt_channel_name_intra)
+        self.btn_select_channel_intra.clicked.connect(partial(prompt_channel_name_intra, self))
         self.channel_selection_layout_intra.addWidget(self.btn_select_channel_intra)
 
         # Create a label to display the selected channel name
@@ -326,7 +364,7 @@ class SyncGUI(QMainWindow):
         # Plot channel button for intracranial files (Initially hidden)
         self.btn_plot_channel_intra = Button("Plot Selected Channel", "lightblue")
         self.btn_plot_channel_intra.setEnabled(False)  # Initially inactive
-        self.btn_plot_channel_intra.clicked.connect(self.plot_channel_intra)
+        self.btn_plot_channel_intra.clicked.connect(partial(plot_channel_intra, self))
         self.channel_layout_intra.addWidget(self.btn_plot_channel_intra)
 
 
@@ -338,7 +376,7 @@ class SyncGUI(QMainWindow):
         # Plot artifact detection button for intracranial (Initially hidden)
         self.btn_artifact_detect_intra = Button("Automatic detection synchronization artifact", "lightblue")
         self.btn_artifact_detect_intra.setEnabled(False)  # Initially hidden
-        self.btn_artifact_detect_intra.clicked.connect(self.detect_artifacts_intra)
+        self.btn_artifact_detect_intra.clicked.connect(partial(detect_artifacts_intra, self))
         self.automatic_artifact_layout_intra.addWidget(self.btn_artifact_detect_intra)
         self.label_automatic_artifact_time_intra = QLabel("No artifact automatically detected")
         self.label_automatic_artifact_time_intra.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
@@ -347,7 +385,7 @@ class SyncGUI(QMainWindow):
 
         self.btn_manual_select_artifact_intra = Button("Manual detection synchronization artifact", "lightblue") 
         self.btn_manual_select_artifact_intra.setEnabled(False)
-        self.btn_manual_select_artifact_intra.clicked.connect(self.manual_selection_intra)
+        self.btn_manual_select_artifact_intra.clicked.connect(partial(manual_selection_intra, self))
         self.manual_artifact_layout_intra.addWidget(self.btn_manual_select_artifact_intra)
         self.label_manual_artifact_time_intra = QLabel("No artifact manually selected")
         self.label_manual_artifact_time_intra.setVisible(False)
@@ -382,7 +420,7 @@ class SyncGUI(QMainWindow):
 
         # File selection button for .xdf
         self.btn_load_file_xdf = Button("Load external file (supported formats: .Poly5, .xdf)", "lightgreen")
-        self.btn_load_file_xdf.clicked.connect(self.load_ext_file)
+        self.btn_load_file_xdf.clicked.connect(partial(load_ext_file, self))
         layout.addWidget(self.btn_load_file_xdf)
 
         # Create a label to display the selected file name
@@ -409,7 +447,7 @@ class SyncGUI(QMainWindow):
         # Channel selection button for .xdf (Initially hidden)
         self.btn_select_channel_xdf = Button("Select Channel", "lightgreen")
         self.btn_select_channel_xdf.setEnabled(False)  # Initially inactive
-        self.btn_select_channel_xdf.clicked.connect(self.select_channel_xdf)
+        self.btn_select_channel_xdf.clicked.connect(partial(select_channel_extra, self))
         self.channel_selection_layout_xdf.addWidget(self.btn_select_channel_xdf)
 
         # Create a label to display the selected channel name
@@ -421,9 +459,8 @@ class SyncGUI(QMainWindow):
         # Plot channel button for .xdf (Initially hidden)
         self.btn_plot_channel_xdf = Button("Plot Selected Channel", "lightgreen")
         self.btn_plot_channel_xdf.setEnabled(False)  # Initially hidden
-        self.btn_plot_channel_xdf.clicked.connect(self.plot_channel_xdf)
+        self.btn_plot_channel_xdf.clicked.connect(partial(plot_channel_extra, self))
         self.channel_layout_xdf.addWidget(self.btn_plot_channel_xdf)
-
 
         self.artifact_layout_xdf = QHBoxLayout()
         self.automatic_artifact_layout_xdf = QVBoxLayout()
@@ -432,7 +469,7 @@ class SyncGUI(QMainWindow):
         # Plot artifact detection button for .xdf (Initially hidden)
         self.btn_artifact_detect_xdf = Button("Automatic detection synchronization artifact", "lightgreen")
         self.btn_artifact_detect_xdf.setEnabled(False)  # Initially hidden
-        self.btn_artifact_detect_xdf.clicked.connect(self.detect_artifacts_xdf)
+        self.btn_artifact_detect_xdf.clicked.connect(partial(detect_artifacts_external, self))
         self.automatic_artifact_layout_xdf.addWidget(self.btn_artifact_detect_xdf)
         self.label_automatic_artifact_time_xdf = QLabel("No artifact automatically detected")
         self.label_automatic_artifact_time_xdf.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
@@ -441,7 +478,7 @@ class SyncGUI(QMainWindow):
 
         self.btn_manual_select_artifact_xdf = Button("Manual detection synchronization artifact", "lightgreen")    
         self.btn_manual_select_artifact_xdf.setEnabled(False)
-        self.btn_manual_select_artifact_xdf.clicked.connect(self.manual_selection_xdf)
+        self.btn_manual_select_artifact_xdf.clicked.connect(partial(manual_selection_external, self))
         self.manual_artifact_layout_xdf.addWidget(self.btn_manual_select_artifact_xdf)
         self.label_manual_artifact_time_xdf = QLabel("No artifact manually selected")
         self.label_manual_artifact_time_xdf.setVisible(False)
@@ -454,7 +491,7 @@ class SyncGUI(QMainWindow):
         self.heart_rate_layout = QHBoxLayout()
         self.btn_select_ecg_channel = Button("Select ECG channel to compute heart rate", "lightgreen")
         self.btn_select_ecg_channel.setEnabled(False)  # Initially inactive
-        self.btn_select_ecg_channel.clicked.connect(self.select_ecg_channel_and_compute_hr_xdf)
+        self.btn_select_ecg_channel.clicked.connect(partial(select_ecg_channel_to_compute_hr_external, self))
         self.heart_rate_layout.addWidget(self.btn_select_ecg_channel)
 
         # Create a label to display the selected channel name
@@ -482,7 +519,7 @@ class SyncGUI(QMainWindow):
         layout_timeshift_page = QVBoxLayout()
 
         self.btn_plot_synced_channels = Button("Plot synchronized channels", "lightyellow")
-        self.btn_plot_synced_channels.clicked.connect(self.plot_synced_channels)
+        self.btn_plot_synced_channels.clicked.connect(partial(plot_synced_channels, self))
         self.btn_plot_synced_channels.setEnabled(False)
         layout_timeshift_page.addWidget(self.btn_plot_synced_channels)
 
@@ -502,7 +539,7 @@ class SyncGUI(QMainWindow):
         layout_timeshift_page_selection_xdf = QVBoxLayout()
 
         self.btn_select_last_art_intra = Button("Select last artifact in intracranial recording", "lightblue")
-        self.btn_select_last_art_intra.clicked.connect(self.select_last_artifact_intra)
+        self.btn_select_last_art_intra.clicked.connect(partial(select_last_artifact_intra, self))
         self.btn_select_last_art_intra.setEnabled(False)
         layout_timeshift_page_selection_intra.addWidget(self.btn_select_last_art_intra)
 
@@ -512,7 +549,7 @@ class SyncGUI(QMainWindow):
 
 
         self.btn_select_last_art_xdf = Button("Select last artifact in extracranial recording", "lightgreen")
-        self.btn_select_last_art_xdf.clicked.connect(self.select_last_artifact_ext)
+        self.btn_select_last_art_xdf.clicked.connect(partial(select_last_artifact_extra, self))
         self.btn_select_last_art_xdf.setEnabled(False)
         layout_timeshift_page_selection_xdf.addWidget(self.btn_select_last_art_xdf)
 
@@ -526,7 +563,7 @@ class SyncGUI(QMainWindow):
 
         layout_timeshift = QHBoxLayout()
         self.btn_compute_timeshift = Button("Compute timeshift", "lightyellow")
-        self.btn_compute_timeshift.clicked.connect(self.compute_timeshift)
+        self.btn_compute_timeshift.clicked.connect(partial(compute_timeshift, self))
         self.btn_compute_timeshift.setEnabled(False)
         layout_timeshift.addWidget(self.btn_compute_timeshift)
 
@@ -567,7 +604,7 @@ class SyncGUI(QMainWindow):
         computing_sf_layout = QHBoxLayout()
         # Compute effective sampling frequency button
         self.btn_compute_eff_sf = Button("Compute effective sampling frequency", "lightyellow")
-        self.btn_compute_eff_sf.clicked.connect(self.compute_eff_sf)
+        self.btn_compute_eff_sf.clicked.connect(partial(compute_eff_sf, self))
         self.btn_compute_eff_sf.setEnabled(False)
         computing_sf_layout.addWidget(self.btn_compute_eff_sf)
 
@@ -602,7 +639,7 @@ class SyncGUI(QMainWindow):
         selection_layout_last = QVBoxLayout()
 
         self.button_select_first_intra = Button("Select first artifact in intracranial recording", "lightblue")
-        self.button_select_first_intra.clicked.connect(self.select_first_artifact_intra_sf)    
+        self.button_select_first_intra.clicked.connect(partial(select_first_artifact_intra_eff_sf_correction, self))    
         self.button_select_first_intra.setEnabled(False)
         self.label_time_select_first_intra = QLabel()
         self.label_time_select_first_intra.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
@@ -610,7 +647,7 @@ class SyncGUI(QMainWindow):
         self.label_sample_select_first_intra.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
 
         self.button_select_last_intra = Button("Select last artifact in intracranial recording", "lightblue")
-        self.button_select_last_intra.clicked.connect(self.select_last_artifact_intra_sf)
+        self.button_select_last_intra.clicked.connect(partial(select_last_artifact_intra_eff_sf_correction, self))
         self.button_select_last_intra.setEnabled(False)
         self.label_time_select_last_intra = QLabel()
         self.label_time_select_last_intra.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
@@ -651,7 +688,7 @@ class SyncGUI(QMainWindow):
         selection_layout_last = QVBoxLayout()
 
         self.button_select_first_extra = Button("Select first artifact in external recording", "lightgreen")
-        self.button_select_first_extra.clicked.connect(self.select_first_artifact_extra_sf)    
+        self.button_select_first_extra.clicked.connect(partial(select_first_artifact_extra_eff_sf_correction, self))    
         self.button_select_first_extra.setEnabled(False)
         self.label_time_select_first_extra = QLabel()
         self.label_time_select_first_extra.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
@@ -659,7 +696,7 @@ class SyncGUI(QMainWindow):
         self.label_sample_select_first_extra.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
 
         self.button_select_last_extra = Button("Select last artifact in external recording", "lightgreen")
-        self.button_select_last_extra.clicked.connect(self.select_last_artifact_extra_sf)
+        self.button_select_last_extra.clicked.connect(partial(select_last_artifact_extra_eff_sf_correction, self))
         self.button_select_last_extra.setEnabled(False)
         self.label_time_select_last_extra = QLabel()
         self.label_time_select_last_extra.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
@@ -679,6 +716,7 @@ class SyncGUI(QMainWindow):
 
 
         return layout
+
 
         #######################################################################
         ###########          LAYOUT OF ECG CLEANING PAGE 1          ###########
@@ -707,12 +745,12 @@ class SyncGUI(QMainWindow):
 
         # Create a button to clean the ecg artifact found, using the interpolation method (Perceive)
         self.btn_start_ecg_cleaning = Button("Start ECG cleaning: interpolation method", "lightyellow")
-        self.btn_start_ecg_cleaning.clicked.connect(self.start_ecg_cleaning_interpolation)
+        self.btn_start_ecg_cleaning.clicked.connect(partial(start_ecg_cleaning_interpolation, self))
         self.btn_start_ecg_cleaning.setEnabled(False) # Should be enabled only when the file is loaded
 
         # Create a button to clean the ecg artifact found, using the template substraction method (Stam et al., 2023)
         self.btn_start_ecg_cleaning_template_sub = Button("Start ECG cleaning: template substraction method", "lightyellow")
-        self.btn_start_ecg_cleaning_template_sub.clicked.connect(self.start_ecg_cleaning_template_sub)
+        self.btn_start_ecg_cleaning_template_sub.clicked.connect(partial(start_ecg_cleaning_template_sub, self))
         self.btn_start_ecg_cleaning_template_sub.setEnabled(False)
 
         layout_cleaning_method.addWidget(self.btn_start_ecg_cleaning)
@@ -917,7 +955,7 @@ class SyncGUI(QMainWindow):
         layout_ext_int_channels_selection_cleaning_with_ext.addLayout(layout_ext_channel_selection_cleaning_with_ext)
 
         self.btn_confirm_and_plot_channels = Button("Plot overlapped selected channels", "lightyellow")
-        self.btn_confirm_and_plot_channels.clicked.connect(self.plot_overlapped_channels_ecg)
+        self.btn_confirm_and_plot_channels.clicked.connect(partial(plot_overlapped_channels_ecg, self))
         self.btn_confirm_and_plot_channels.setEnabled(False)
 
         layout_channel_selection_and_plot.addLayout(layout_ext_int_channels_selection_cleaning_with_ext)
@@ -982,17 +1020,17 @@ class SyncGUI(QMainWindow):
 
         # Create a button to clean the ecg artifact found, using the interpolation method (Perceive)
         self.btn_start_ecg_cleaning_with_ext = Button("Start ECG cleaning: interpolation method", "lightyellow")
-        self.btn_start_ecg_cleaning_with_ext.clicked.connect(self.start_ecg_cleaning_interpolation_with_ext)
+        self.btn_start_ecg_cleaning_with_ext.clicked.connect(partial(start_ecg_cleaning_interpolation_with_ext, self))
         self.btn_start_ecg_cleaning_with_ext.setEnabled(False) # Should be enabled only when the file is loaded
 
         # Create a button to clean the ecg artifact found, using the template substraction method (Stam et al., 2023)
         self.btn_start_ecg_cleaning_template_sub_with_ext = Button("Start ECG cleaning: template substraction method", "lightyellow")
-        self.btn_start_ecg_cleaning_template_sub_with_ext.clicked.connect(self.start_ecg_cleaning_template_sub_with_ext)
+        self.btn_start_ecg_cleaning_template_sub_with_ext.clicked.connect(partial(start_ecg_cleaning_template_sub_with_ext, self))
         self.btn_start_ecg_cleaning_template_sub_with_ext.setEnabled(False)
 
         # Create a button to clean the ecg artifact found, using the SVD method (Stam et al., 2023)
         self.btn_start_ecg_cleaning_svd_with_ext = Button("Start ECG cleaning: SVD method", "lightyellow")
-        self.btn_start_ecg_cleaning_svd_with_ext.clicked.connect(self.start_ecg_cleaning_svd_with_ext)
+        self.btn_start_ecg_cleaning_svd_with_ext.clicked.connect(partial(start_ecg_cleaning_svd_with_ext, self))
         self.btn_start_ecg_cleaning_svd_with_ext.setEnabled(False)
 
         layout_cleaning_method_with_ext.addWidget(self.btn_start_ecg_cleaning_with_ext)
@@ -1073,11 +1111,11 @@ class SyncGUI(QMainWindow):
         self.stacked_widget.setCurrentIndex(2)
         self.update_button_styles(self.btn_effective_sf)
         if self.dataset_intra.selected_channel_index is not None:
-            self.plot_scatter_channel_intra_sf()
+            plot_scatter_channel_intra_sf(self)
             self.button_select_first_intra.setEnabled(True)
             self.button_select_last_intra.setEnabled(True)
         if self.dataset_extra.selected_channel_index is not None:
-            self.plot_scatter_channel_extra_sf()
+            plot_scatter_channel_extra_sf(self)
             self.button_select_first_extra.setEnabled(True)
             self.button_select_last_extra.setEnabled(True)        
 
@@ -1102,223 +1140,6 @@ class SyncGUI(QMainWindow):
             webbrowser.open(f'file://{help_file_path}')
         else:
             print("Help file not found.")
-
-
-        #######################################################################
-        #                           PLOTTING FUNCTIONS                        #
-        #######################################################################
-
-
-    def plot_overlapped_channels_ecg(self):
-        self.toolbar_overlapped.setEnabled(True)
-        self.canvas_overlapped.setEnabled(True)
-        self.ax_overlapped.clear()
-
-        # Plot the external channel synchronized
-        data_extra = self.dataset_extra.synced_data.get_data()[self.dataset_extra.selected_channel_index_ecg]
-        data_extra_scaled = data_extra
-
-        # Apply 0.1 Hz-100Hz band-pass filter to ECG data
-        b, a = scipy.signal.butter(1, 0.05, "highpass")
-        detrended_data = scipy.signal.filtfilt(b, a, data_extra_scaled)
-        low_cutoff = 100.0  # Hz
-        b2, a2 = scipy.signal.butter(
-            N=4,  # Filter order
-            Wn=low_cutoff,
-            btype="lowpass",
-            fs=self.dataset_extra.sf 
-        )
-        ecg_data = scipy.signal.filtfilt(b2, a2, detrended_data)
-        timescale_extra = np.linspace(0, self.dataset_extra.synced_data.get_data().shape[1]/self.dataset_extra.sf, self.dataset_extra.synced_data.get_data().shape[1])
-
-        self.ax_overlapped.plot(timescale_extra, ecg_data, color='#90EE90', label='External ECG channel')
-        
-        # Plot the intracranial channel synchronized
-        data_intra = self.dataset_intra.synced_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
-        print(len(data_intra))
-        timescale_intra = np.linspace(0, self.dataset_intra.synced_data.get_data().shape[1]/self.dataset_intra.sf, self.dataset_intra.synced_data.get_data().shape[1])
-        print(len(timescale_intra))
-        self.ax_overlapped.plot(timescale_intra, data_intra, color='#6495ED', label='Intracranial channel to clean')
-        self.ax_overlapped.legend(loc='upper left')
-        self.canvas_overlapped.draw()
-
-        self.box_filtering_option_with_ext.setEnabled(True)
-        self.btn_validate_filtering_with_ext.setEnabled(True)
-        self.btn_start_ecg_cleaning_with_ext.setEnabled(True)
-        self.btn_start_ecg_cleaning_template_sub_with_ext.setEnabled(True)
-        self.btn_start_ecg_cleaning_svd_with_ext.setEnabled(True)
-
-
-    def plot_scatter_channel_intra_sf(self):
-        """Plot scatter plot of the selected channel data."""
-        
-        self.toolbar_intra_sf.setEnabled(True)
-        self.canvas_intra_sf.setEnabled(True)
-        self.ax_intra_sf.clear()
-        data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index]
-        #timescale = self.dataset_intra.times
-        timescale = np.linspace(0, self.dataset_intra.raw_data.get_data().shape[1]/self.dataset_intra.sf, self.dataset_intra.raw_data.get_data().shape[1])
-
-        self.ax_intra_sf.scatter(timescale, data, s=8)
-        self.canvas_intra_sf.draw()
-
-
-    def plot_scatter_channel_extra_sf(self):
-        """Plot scatter plot of the selected channel data."""
-        
-        self.toolbar_extra_sf.setEnabled(True)
-        self.canvas_extra_sf.setEnabled(True)
-        self.ax_extra_sf.clear()
-        b, a = scipy.signal.butter(1, 0.05, "highpass")
-        data = scipy.signal.filtfilt(b, a, self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index])
-        timescale = self.dataset_extra.times
-
-        self.ax_extra_sf.scatter(timescale, data, s=8)
-        self.canvas_extra_sf.draw()
-
-
-
-    def plot_channel_intra(self):
-        """Plot the selected channel data from the intracranial file."""
-        if self.dataset_intra.raw_data and self.dataset_intra.selected_channel_index is not None:
-            self.canvas_intra.setEnabled(True)
-            self.toolbar_intra.setEnabled(True)
-            self.ax_intra.clear()
-            channel_data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index]
-            times = self.dataset_intra.times
-            self.ax_intra.plot(times, channel_data)
-            self.ax_intra.set_title(f"Channel {self.dataset_intra.selected_channel_index} data - {self.dataset_intra.selected_channel_name}")
-            self.ax_intra.set_xlabel("Time (s)")
-            self.ax_intra.set_ylabel("Amplitude")
-            self.canvas_intra.draw()
-
-
-    def plot_scatter_channel_intra(self, art_start_intra=None):
-        """Plot scatter plot of the selected channel data."""
-        
-        self.toolbar_intra.setEnabled(True)
-        self.canvas_intra.setEnabled(True)
-        self.ax_intra.clear()
-        
-        # Plot the channel data
-        channel_data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index]
-        times = self.dataset_intra.raw_data.times  # Time vector corresponding to the data points
-        
-        # Plot scatter points
-        start = int(round(art_start_intra * self.dataset_intra.sf)-round(self.dataset_intra.sf/10))
-        end = int(round(art_start_intra * self.dataset_intra.sf)+round(self.dataset_intra.sf/10))
-        times_array = np.array(times)
-        channel_data_array = np.array(channel_data)
-        self.ax_intra.scatter(times_array[start:end], channel_data_array[start:end], s=5)
-
-
-        # Highlight artifact start points if available
-        if art_start_intra is not None:
-                self.ax_intra.axvline(x=art_start_intra, color='red', linestyle='--', label='Artifact Start')
-
-        self.ax_intra.legend()
-        
-        # Allow interactive features like zoom and pan
-        self.canvas_intra.draw()
-
-    def plot_channel_xdf(self):
-        """Plot the selected channel data from the .xdf file."""
-        if self.dataset_extra.raw_data and self.dataset_extra.selected_channel_index is not None:
-            self.canvas_xdf.setEnabled(True)
-            self.toolbar_xdf.setEnabled(True)
-            self.ax_xdf.clear()
-            channel_data = self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index]
-            times = self.dataset_extra.times
-            # apply a high-pass filter to detrend the data if the channel to plot is a bipolar channel:
-            if self.dataset_extra.selected_channel_name.startswith("BIP"):
-                b, a = scipy.signal.butter(1, 0.05, "highpass")
-                channel_data_to_plot = scipy.signal.filtfilt(b, a, channel_data)
-            else:
-                channel_data_to_plot = channel_data
-            self.ax_xdf.plot(times, channel_data_to_plot)
-            self.ax_xdf.set_title(f"Channel {self.dataset_extra.selected_channel_index} data - {self.dataset_extra.selected_channel_name}")
-            self.ax_xdf.set_xlabel("Time (s)")
-            self.ax_xdf.set_ylabel("Amplitude")
-            self.canvas_xdf.draw()
-
-
-    
-
-
-    def plot_scatter_channel_xdf(self, art_start_BIP=None):
-        """Plot scatter plot of the selected channel data."""
-        self.toolbar_xdf.setEnabled(True)
-        self.canvas_xdf.setEnabled(True)
-        self.ax_xdf.clear()
-
-        # Plot the channel data
-        channel_data = self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index]
-        b, a = scipy.signal.butter(1, 0.05, "highpass")
-        channel_data_to_plot = scipy.signal.filtfilt(b, a, channel_data)
-        times = self.dataset_extra.raw_data.times  # Time vector corresponding to the data points
-        
-
-        # Plot scatter points
-        start = int(round(art_start_BIP * self.dataset_extra.sf)-round(self.dataset_extra.sf/50))
-        end = int(round(art_start_BIP * self.dataset_extra.sf)+round(self.dataset_extra.sf/50))
-        times_array = np.array(times)
-        channel_data_array = np.array(channel_data_to_plot)
-        self.ax_xdf.scatter(times_array[start:end], channel_data_array[start:end], s=5)
-
-
-        # Highlight artifact start points if available
-        if art_start_BIP is not None:
-                self.ax_xdf.axvline(x=art_start_BIP, color='red', linestyle='--', label='Artifact Start')
-
-
-        self.ax_xdf.legend()
-        
-        # Allow interactive features like zoom and pan
-        self.canvas_xdf.draw()
-
-
-    def plot_synced_channels(self):
-        self.toolbar_synced.setEnabled(True)
-        self.canvas_synced.setEnabled(True)
-        self.ax_synced.clear()
-
-        # scale y-axis to the same range for both channels by modifying the ylim for the external channel:
-        y_max_factor = self.dataset_intra.max_y_value / self.dataset_extra.max_y_value
-
-        # Plot the external channel synchronized
-        data_extra = self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index]
-        data_extra_scaled = data_extra * y_max_factor
-
-        b, a = scipy.signal.butter(1, 0.05, "highpass")
-        data_extra_detrended = scipy.signal.filtfilt(b, a, data_extra_scaled)
-    
-        timescale_extra = self.dataset_extra.times
-        art_start_0_extra = self.dataset_extra.art_start - 1
-
-        # Find the index in self.dataset_extra.times corresponding to art_start_0
-        art_start_index_extra = (timescale_extra >= art_start_0_extra).argmax()
-        offset_data_extra = data_extra_detrended[art_start_index_extra:]
-        offset_timescale_extra = timescale_extra[art_start_index_extra:] - art_start_0_extra
-        self.dataset_extra.reset_timescale = offset_timescale_extra
-        self.dataset_extra.reset_data = offset_data_extra
-        self.ax_synced.scatter(offset_timescale_extra, offset_data_extra, s=8, color='#90EE90', label='External')
-
-        # Plot the intracranial channel synchronized
-        data_intra = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index]
-        timescale_intra = self.dataset_intra.times
-        art_start_0_intra = self.dataset_intra.art_start - 1
-        # Find the index in self.dataset_intra.times corresponding to art_start_0
-        art_start_index_intra = (timescale_intra >= art_start_0_intra).argmax()
-        offset_data_intra = data_intra[art_start_index_intra:]
-        offset_timescale_intra = timescale_intra[art_start_index_intra:] - art_start_0_intra
-        self.dataset_intra.reset_timescale = offset_timescale_intra
-        self.dataset_intra.reset_data = offset_data_intra
-        self.ax_synced.scatter(offset_timescale_intra, offset_data_intra, s=8, color='#6495ED', label='Intracranial')
-        self.ax_synced.legend(loc='upper left')
-        self.canvas_synced.draw()
-        self.btn_select_last_art_intra.setEnabled(True)
-        self.btn_select_last_art_xdf.setEnabled(True)
-
 
 
         #######################################################################
@@ -1395,310 +1216,6 @@ class SyncGUI(QMainWindow):
             self.box_thresh_ecg.setEnabled(True)
             self.btn_validate_start_end_time.setEnabled(True)
             self.box_filtering_option.setEnabled(True)
-
-
-    def select_first_artifact_intra_sf(self):
-        # Check if we're already in selection mode of the last and prevent interference
-        if hasattr(self, 'cid_intra_last') and self.cid_intra_last is not None:
-            self.canvas_intra_sf.mpl_disconnect(self.cid_intra_last)
-            #self.cid_intra_last = None
-
-        pos = []
-
-        self.ax_intra_sf.set_title(
-            'Right click on the plot to select the start of the first artifact (shown by the black "+")'
-        )
-        #self.canvas_intra_sf.draw()
-
-        # Create or update the intracranial "+" symbol
-        if not hasattr(self, 'plus_symbol_intra_first'):
-            self.plus_symbol_intra_first, = self.ax_intra_sf.plot([], [], "k+", markersize=10)
-
-
-        def onclick(event):
-            if event.inaxes is not None:  # Check if the click is inside the axes
-                if event.button == MouseButton.RIGHT:
-                    pos.append([event.xdata, event.ydata])
-
-                    # Update the position of the black "+" symbol
-                    closest_index_x = np.argmin(np.abs(self.dataset_intra.times - event.xdata))
-                    closest_value_x = self.dataset_intra.times[closest_index_x]
-                    closest_value_y = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index][closest_index_x]
-                    self.plus_symbol_intra_first.set_data([closest_value_x], [closest_value_y])
-                    self.canvas_intra_sf.draw()
-
-                    self.dataset_intra.first_art_start_time = closest_value_x
-                    #self.dataset_intra.first_art_start_idx = closest_index_x
-                    self.dataset_intra.first_art_start_idx = int(np.round(closest_value_x * self.dataset_intra.sf))
-                    self.label_time_select_first_intra.setText(f"Selected Artifact start: {np.round(closest_value_x, decimals=3)} s")
-                    self.label_sample_select_first_intra.setText(f"Sample n# {int(self.dataset_intra.first_art_start_idx)}")
-                    self.update_compute_eff_sf_button_state()
-
-        self.cid_intra_first = self.canvas_intra_sf.mpl_connect("button_press_event", onclick)
-
-
-    def select_last_artifact_intra_sf(self):
-        # Check if we're already in external selection mode and prevent interference
-        if hasattr(self, 'cid_intra_first') and self.cid_intra_first is not None:
-            self.canvas_intra_sf.mpl_disconnect(self.cid_intra_first)
-            #self.cid_intra_first = None
-
-        pos = []
-
-        self.ax_intra_sf.set_title(
-            'Right click on the plot to select the start of the last artifact (shown by the red "+")'
-        )
-        #self.canvas_intra_sf.draw()
-
-        # Create or update the intracranial "+" symbol
-        if not hasattr(self, 'plus_symbol_intra_last'):
-            self.plus_symbol_intra_last, = self.ax_intra_sf.plot([], [], "r+", markersize=10)
-
-        def onclick(event):
-            if event.inaxes is not None:  # Check if the click is inside the axes
-                if event.button == MouseButton.RIGHT:
-                    pos.append([event.xdata, event.ydata])
-
-                    # Update the position of the black "+" symbol
-                    closest_index_x = np.argmin(np.abs(self.dataset_intra.times - event.xdata))
-                    closest_value_x = self.dataset_intra.times[closest_index_x]
-                    closest_value_y = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index][closest_index_x]
-                    self.plus_symbol_intra_last.set_data([closest_value_x], [closest_value_y])
-                    self.canvas_intra_sf.draw()
-                    self.dataset_intra.last_art_start_time = closest_value_x
-                    self.dataset_intra.last_art_start_idx = int(np.round(closest_value_x * self.dataset_intra.sf))
-                    self.label_time_select_last_intra.setText(f"Selected Artifact start: {np.round(closest_value_x, decimals=3)} s")
-                    self.label_sample_select_last_intra.setText(f"Sample n# {int(self.dataset_intra.last_art_start_idx)}")
-                    self.update_compute_eff_sf_button_state()
-
-        self.cid_intra_last = self.canvas_intra_sf.mpl_connect("button_press_event", onclick)            
-
-    def select_first_artifact_extra_sf(self):
-        # Check if we're already in selection mode of the last and prevent interference
-        if hasattr(self, 'cid_extra_last') and self.cid_extra_last is not None:
-            self.canvas_extra_sf.mpl_disconnect(self.cid_extra_last)
-
-
-        pos = []
-
-        self.ax_extra_sf.set_title(
-            'Right click on the plot to select the start of the first artifact (shown by the black "+")'
-        )
-        #self.canvas_extra_sf.draw()
-
-        # Create or update the extracranial "+" symbol
-        if not hasattr(self, 'plus_symbol_extra_first'):
-            self.plus_symbol_extra_first, = self.ax_extra_sf.plot([], [], "k+", markersize=10)
-        b, a = scipy.signal.butter(1, 0.05, "highpass")
-        data = scipy.signal.filtfilt(b, a, self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index])
-
-        def onclick(event):
-            if event.inaxes is not None:  # Check if the click is inside the axes
-                if event.button == MouseButton.RIGHT:
-                    pos.append([event.xdata, event.ydata])
-
-                    # Update the position of the black "+" symbol
-                    closest_index_x = np.argmin(np.abs(self.dataset_extra.times - event.xdata))
-                    closest_value_x = self.dataset_extra.times[closest_index_x]
-                    closest_value_y = data[closest_index_x]
-                    self.plus_symbol_extra_first.set_data([closest_value_x], [closest_value_y])
-                    self.canvas_extra_sf.draw()
-
-                    self.dataset_extra.first_art_start_time = closest_value_x
-                    self.dataset_extra.first_art_start_idx = closest_index_x 
-                    self.label_time_select_first_extra.setText(f"Selected Artifact start: {np.round(closest_value_x, decimals=8)} s")
-                    self.label_sample_select_first_extra.setText(f"Sample n# {int(self.dataset_extra.first_art_start_idx)}")
-                    self.update_compute_eff_sf_button_state()
-
-        self.cid_extra_first = self.canvas_extra_sf.mpl_connect("button_press_event", onclick)
-
-
-    def select_last_artifact_extra_sf(self):
-        # Check if we're already in external selection mode and prevent interference
-        if hasattr(self, 'cid_extra_first') and self.cid_extra_first is not None:
-            self.canvas_extra_sf.mpl_disconnect(self.cid_extra_first)
-            #self.cid_intra_first = None
-
-        pos = []
-
-        self.ax_extra_sf.set_title(
-            'Right click on the plot to select the start of the last artifact (shown by the red "+")'
-        )
-        #self.canvas_extra_sf.draw()
-
-        # Create or update the intracranial "+" symbol
-        if not hasattr(self, 'plus_symbol_extra_last'):
-            self.plus_symbol_extra_last, = self.ax_extra_sf.plot([], [], "r+", markersize=10)
-        b, a = scipy.signal.butter(1, 0.05, "highpass")
-        data = scipy.signal.filtfilt(b, a, self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index])
-        
-        def onclick(event):
-            if event.inaxes is not None:  # Check if the click is inside the axes
-                if event.button == MouseButton.RIGHT:
-                    pos.append([event.xdata, event.ydata])
-
-                    # Update the position of the black "+" symbol
-                    closest_index_x = np.argmin(np.abs(self.dataset_extra.times - event.xdata))
-                    closest_value_x = self.dataset_extra.times[closest_index_x]
-                    closest_value_y = data[closest_index_x]
-                    self.plus_symbol_extra_last.set_data([closest_value_x], [closest_value_y])
-                    self.canvas_extra_sf.draw()
-                    self.dataset_extra.last_art_start_time = closest_value_x
-                    self.dataset_extra.last_art_start_idx = closest_index_x
-                    self.label_time_select_last_extra.setText(f"Selected Artifact start: {np.round(closest_value_x, decimals=8)} s")
-                    self.label_sample_select_last_extra.setText(f"Sample n# {int(self.dataset_extra.last_art_start_idx)}")
-                    self.update_compute_eff_sf_button_state()
-
-        self.cid_extra_last = self.canvas_extra_sf.mpl_connect("button_press_event", onclick)        
-
-    def prompt_channel_name_intra(self):
-        """Prompt for channel name selection for intracranial file."""
-        if self.dataset_intra.raw_data:
-            try:
-                channel_names = self.dataset_intra.ch_names  # List of channel names
-                channel_name, ok = QInputDialog.getItem(self, "Channel Selection", "Select a channel:", channel_names, 0, False)
-
-                if ok and channel_name:  # Check if a channel was selected
-                    self.dataset_intra.selected_channel_name = channel_name
-                    self.dataset_intra.selected_channel_index = channel_names.index(channel_name)  # Get the index of the selected channel
-                    self.channel_label_intra.setText(f"Selected Channel: {channel_name}")
-                    self.dataset_intra.max_y_value = np.nanmax(self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index])
-                    # Enable the plot button since a channel has been selected
-                    self.btn_plot_channel_intra.setEnabled(True)
-                    self.btn_artifact_detect_intra.setEnabled(True)    
-                    self.label_automatic_artifact_time_intra.setVisible(True)   
-                    self.btn_manual_select_artifact_intra.setEnabled(True)
-                    self.label_manual_artifact_time_intra.setVisible(True)
-                    
-
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to select channel: {e}")
-
-    def select_ecg_channel_and_compute_hr_xdf(self):
-        """Open a dialog to select a channel by name from the .xdf file."""
-        if self.dataset_extra.raw_data is not None:
-            channel_names = self.dataset_extra.ch_names  # Get the channel names
-            dialog = QWidget()
-            dialog.setWindowTitle("Select ECG channel")
-            layout = QVBoxLayout(dialog)
-
-            # Create a list widget to display channel names
-            channel_list = QListWidget(dialog)
-            channel_list.addItems(channel_names)  # Add channel names to the list
-            layout.addWidget(channel_list)
-
-            # Create OK and Cancel buttons
-            ok_button = QPushButton("OK", dialog)
-            cancel_button = QPushButton("Cancel", dialog)
-            layout.addWidget(ok_button)
-            layout.addWidget(cancel_button)
-
-            # Define button actions
-            def on_ok():
-                selected_items = channel_list.selectedItems()
-                if selected_items:
-                    self.dataset_extra.ecg_selected_channel_name = selected_items[0].text()  # Get the selected channel name
-                    self.dataset_extra.ecg_selected_channel_index = channel_names.index(self.dataset_extra.ecg_selected_channel_name)  # Get the index
-                    channel_data = self.dataset_extra.raw_data.get_data()[self.dataset_extra.ecg_selected_channel_index]
-                    # Apply 0.1 Hz-100Hz band-pass filter to ECG data
-                    b, a = scipy.signal.butter(1, 0.05, "highpass")
-                    detrended_data = scipy.signal.filtfilt(b, a, channel_data)
-                    low_cutoff = 100.0  # Hz
-                    b2, a2 = scipy.signal.butter(
-                        N=4,  # Filter order
-                        Wn=low_cutoff,
-                        btype="lowpass",
-                        fs=self.dataset_extra.sf 
-                    )
-                    ecg_data = scipy.signal.filtfilt(b2, a2, detrended_data)
-
-                    # Remove the first and last 30 seconds (to avoid sync pulses while computing the threshold):
-                    start = int(30*self.dataset_extra.sf)
-                    end = int((self.dataset_extra.times[-1] - 30)*self.dataset_extra.sf)
-                    ecg_data_cropped = ecg_data[start:end]
-                    threshold = np.percentile(ecg_data_cropped, 95)
-                    
-                    # calculate heart rate based on the ecg_data channel:
-                    heartbeats = scipy.signal.find_peaks(ecg_data, height=threshold, distance = self.dataset_extra.sf // 2)
-                    hr = len(heartbeats[0]) / (len(ecg_data) / self.dataset_extra.sf) * 60  # in bpm
-
-                    if not 55 <= hr <= 120: # if the cardiac artifact polarity is reversed, it doesn't find peaks, so the signal should be reversed before computing again
-                        # calculate heart rate based on the ecg_data channel:
-                        threshold = np.percentile(- ecg_data_cropped, 95)
-                        heartbeats = scipy.signal.find_peaks(- ecg_data, height=threshold, distance = self.dataset_extra.sf // 2)
-                        hr = len(heartbeats[0]) / (len(ecg_data) / self.dataset_extra.sf) * 60  # in bpm
-
-                    self.ecg_channel_label.setText(f"Heart rate: {hr} bpm")
-                    dialog.close()
-                    #self.update_synchronize_button_state()  # Check if we can enable the button
-
-            def on_cancel():
-                dialog.close()
-
-            ok_button.clicked.connect(on_ok)
-            cancel_button.clicked.connect(on_cancel)
-
-            dialog.setLayout(layout)
-            dialog.show()
-
-    def select_channel_xdf(self):
-        """Open a dialog to select a channel by name from the .xdf file."""
-        if self.dataset_extra.raw_data is not None:
-            channel_names = self.dataset_extra.ch_names  # Get the channel names
-            dialog = QWidget()
-            dialog.setWindowTitle("Select Channel")
-            layout = QVBoxLayout(dialog)
-
-            # Create a list widget to display channel names
-            channel_list = QListWidget(dialog)
-            channel_list.addItems(channel_names)  # Add channel names to the list
-            layout.addWidget(channel_list)
-
-            # Create OK and Cancel buttons
-            ok_button = QPushButton("OK", dialog)
-            cancel_button = QPushButton("Cancel", dialog)
-            layout.addWidget(ok_button)
-            layout.addWidget(cancel_button)
-
-            # Define button actions
-            def on_ok():
-                selected_items = channel_list.selectedItems()
-                if selected_items:
-                    self.dataset_extra.selected_channel_name = selected_items[0].text()  # Get the selected channel name
-                    self.dataset_extra.selected_channel_index = channel_names.index(self.dataset_extra.selected_channel_name)  # Get the index
-                    channel_data = self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index]
-                    b, a = scipy.signal.butter(1, 0.05, "highpass")
-                    detrended_data = scipy.signal.filtfilt(b, a, channel_data)
-                    self.dataset_extra.min_y_value = detrended_data.min()
-                    self.dataset_extra.max_y_value = detrended_data.max()
-                    self.channel_label_xdf.setText(f"Selected Channel: {self.dataset_extra.selected_channel_name}")
-                    self.btn_plot_channel_xdf.setEnabled(True)
-                    dialog.close()
-                    self.btn_artifact_detect_xdf.setEnabled(True)
-                    self.label_automatic_artifact_time_xdf.setVisible(True)
-                    self.btn_manual_select_artifact_xdf.setEnabled(True)
-                    self.label_manual_artifact_time_xdf.setVisible(True)
-                    self.update_synchronize_button_state()  # Check if we can enable the button
-
-            def on_cancel():
-                dialog.close()
-
-            ok_button.clicked.connect(on_ok)
-            cancel_button.clicked.connect(on_cancel)
-
-            dialog.setLayout(layout)
-            dialog.show()
-
-
-    def select_folder(self):
-        # Open a QFileDialog to select a folder
-        folder_path = QFileDialog.getExistingDirectory(self, "Select Folder")
-        self.folder_path = folder_path
-        self.label_saving_folder.setText(f"Results will be saved in: {folder_path}")
-        
-        if folder_path:  # Check if the user selected a folder
-            print(f"Selected folder: {folder_path}")
-
 
 
 
@@ -1872,732 +1389,6 @@ class SyncGUI(QMainWindow):
             self.btn_sync_as_mat.setEnabled(True)
 
 
-
-        #######################################################################
-        #                        IMPORT/EXPORT FUNCTIONS                      #
-        #######################################################################
-
-    def load_mat_file(self):
-        """Load .mat file."""
-        file_name, _ = QFileDialog.getOpenFileName(self, "Select MAT File", "", "MAT Files (*.mat);;All Files (*)")
-        
-        if file_name:
-            try:
-                # Load the .mat file using mne's read_raw_fieldtrip
-                raw_data = read_raw_fieldtrip(file_name, info={}, data_name="data")
-                self.dataset_intra.raw_data = raw_data  # Assign to dataset
-                self.dataset_intra.sf = raw_data.info["sfreq"]  # Assign sampling frequency
-                self.dataset_intra.ch_names = raw_data.ch_names  # Assign channel names#
-                self.dataset_intra.times = np.linspace(0, raw_data.get_data().shape[1]/self.dataset_intra.sf, raw_data.get_data().shape[1])
-                self.file_label_intra.setText(f"Selected File: {basename(file_name)}")
-                self.dataset_intra.file_name = basename(file_name)
-                self.dataset_intra.file_path = dirname(file_name)
-
-                # Show channel selection and plot buttons for intracranial
-                self.btn_select_channel_intra.setEnabled(True)
-                self.channel_label_intra.setEnabled(True)
-                self.btn_choose_channel.setEnabled(True)
-                
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to load .mat file: {e}")
-
-    def load_ext_file(self):
-        """Load external file. Supported file formats are .xdf, .poly5"""
-        file_name, _ = QFileDialog.getOpenFileName(self, "Select External File", "", "All Files (*);;XDF Files (*.xdf);;Poly5 Files (*.Poly5)")
-        self.file_label_xdf.setText(f"Selected File: {basename(file_name)}")
-        self.dataset_extra.file_name = basename(file_name)
-        self.dataset_extra.file_path = dirname(file_name)
-        
-        if file_name.endswith(".xdf"):
-            self.load_xdf_file(file_name)
-
-        elif file_name.endswith(".Poly5"):
-                self.load_poly5_file(file_name)
-
-
-    def load_poly5_file(self, file_name):
-        """Load .poly5 file."""
-        try:
-            TMSi_data = Poly5Reader(file_name)
-            toMNE = True
-            TMSi_rec = TMSi_data.read_data_MNE()
-            self.dataset_extra.raw_data = TMSi_rec
-            self.dataset_extra.sf = TMSi_rec.info["sfreq"]  # Get the sampling frequency
-            self.dataset_extra.ch_names = TMSi_rec.ch_names  # Get the channel names
-            self.dataset_extra.times = TMSi_rec.times # Get the timescale
-
-            # Show channel selection and plot buttons for .xdf
-            self.channel_label_xdf.setEnabled(True)
-            self.btn_select_channel_xdf.setEnabled(True)
-            self.btn_select_ecg_channel.setEnabled(True)
-            self.ecg_channel_label.setEnabled(True)
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load .poly5 file: {e}")
-
-
-    def load_xdf_file(self, file_name):
-        """Load .xdf file."""
-        try:
-            # Load the .xdf file using the read_raw function
-            stream_id = self.find_EEG_stream(file_name, stream_name='SAGA')
-            raw_data = read_raw(file_name, stream_ids=[stream_id], preload=True)
-            self.dataset_extra.raw_data = raw_data
-            self.dataset_extra.sf = raw_data.info["sfreq"]  # Get the sampling frequency
-            self.dataset_extra.ch_names = raw_data.ch_names  # Get the channel names
-            self.dataset_extra.times = raw_data.times # Get the timescale
-
-            # Show channel selection and plot buttons for .xdf
-            self.channel_label_xdf.setEnabled(True)
-            self.btn_select_channel_xdf.setEnabled(True)
-            self.btn_select_ecg_channel.setEnabled(True)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load .xdf file: {e}")
-
-    def find_EEG_stream(self, fpath_external, stream_name):
-        """Find the EEG stream in the .xdf file."""
-        xdf_datas = resolve_streams(fpath_external)
-        streams_dict = {stream['name']: stream['stream_id'] for stream in xdf_datas}
-        stream_id = streams_dict.get(stream_name)
-
-        if stream_id is None:
-            raise ValueError(f"Stream '{stream_name}' not found in the XDF file.")
-        
-        return stream_id
-
-    def save_datasets_as_set(self):
-        print("events from annotations extraction")
-        events, _ = mne.events_from_annotations(self.dataset_extra.raw_data)
-        inv_dic = {v: str(k) for k, v in _.items()}
-
-        ## offset intracranial recording (crop everything that is more than 1s before the artifact)
-        #tmax_lfp = self.dataset_intra.times[-2]
-        #tmax_lfp = max(self.dataset_intra.raw_data.times)
-        new_start_intracranial = self.dataset_intra.art_start - 1
-        #lfp_rec_offset = self.dataset_intra.raw_data.copy().crop(tmin=new_start_intracranial, tmax=tmax_lfp)
-        lfp_rec_offset = self.dataset_intra.synced_data
-        
-        #print(f"tmax_lfp for cropping is: {tmax_lfp}")
-
-        ## offset external recording (crop everything that is more than 1s before the artifact)
-        #tmax_external = max(self.dataset_extra.times)
-        new_start_external = self.dataset_extra.art_start - 1
-        #TMSi_rec_offset = self.dataset_extra.raw_data.copy().crop(tmin=new_start_external, tmax=tmax_external)
-        TMSi_rec_offset = self.dataset_extra.synced_data
-
-        ## transfer of the events from the external to the intracranial recording
-        # create a duplicate of the events to manipulate it without changing the external one
-        events_lfp = deepcopy(events)
-
-        # get the events from the external in time instead of samples to account for the different sampling frequencies
-        events_in_time = events[:,0]/self.dataset_extra.sf
-
-        # then offset the events in time to the new start of the external recording
-        events_in_time_offset = events_in_time - new_start_external
-
-        if self.dataset_intra.eff_sf is not None:
-            lfp_sf = self.dataset_intra.eff_sf
-        else:
-            lfp_sf = self.dataset_intra.sf
-
-        # convert the events in time offset to samples corresponding to the sampling frequency of the intracranial recording
-        # because the annotations object works with samples, not timings
-        events_in_time_offset_lfp = events_in_time_offset * lfp_sf
-        events_lfp[:,0] = events_in_time_offset_lfp
-
-        # Recast event descriptions to standard Python strings
-        #events_lfp[:, 2] = events_lfp[:, 2].astype(str)
-
-        ## create an annotation object for the intracranial recording
-        annotations_lfp = mne.annotations_from_events(events_lfp, sfreq=lfp_sf, event_desc=inv_dic)
-
-        lfp_rec_offset.set_annotations(None) # make sure that no annotations are present
-        lfp_rec_offset.set_annotations(annotations_lfp) # set the new annotations
-
-        external_title = ("SYNCHRONIZED_EXTERNAL_" + str(self.dataset_extra.file_name[:-4]) + ".set")
-
-        if len(self.dataset_intra.synced_data.ch_names) > 6:
-            lfp_title = ("SYNCHRONIZED_INTRACRANIAL_CLEANED_" + str(self.dataset_intra.file_name[:-4]) + ".set")
-        else:
-            lfp_title = ("SYNCHRONIZED_INTRACRANIAL_" + str(self.dataset_intra.file_name[:-4]) + ".set")
-
-
-        if self.folder_path is not None:
-            fname_external_out=join(self.folder_path, external_title)
-            fname_lfp_out =join(self.folder_path, lfp_title)
-        else:
-            fname_external_out = external_title
-            fname_lfp_out = lfp_title
-
-        TMSi_rec_offset_annotations_onset= (TMSi_rec_offset.annotations.onset) - new_start_external
-        lfp_rec_offset_annotations_onset= (lfp_rec_offset.annotations.onset) - new_start_intracranial
-        
-        lfp_timescale = np.linspace(0, self.dataset_intra.synced_data.get_data().shape[1]/lfp_sf, self.dataset_intra.synced_data.get_data().shape[1])
-        
-        write_set(
-            fname_external_out, 
-            TMSi_rec_offset, 
-            TMSi_rec_offset_annotations_onset,
-            TMSi_rec_offset.info['sfreq'],
-            TMSi_rec_offset.times
-            )
-        write_set(
-            fname_lfp_out, 
-            lfp_rec_offset, 
-            lfp_rec_offset_annotations_onset,
-            lfp_sf,
-            lfp_timescale
-            )
-
-        QMessageBox.information(self, "Synchronization", "Synchronization done. Both files saved as .SET")
-
-    
-
-    def synchronize_datasets_as_pickles(self): 
-        ## Intracranial ##
-        # Crop beginning of LFP intracranial recording 1 second before first artifact:
-        time_start_LFP_0 = self.dataset_intra.art_start - 1  # 1s before first artifact
-        index_start_LFP = time_start_LFP_0 * (self.dataset_intra.sf)
-
-        LFP_array = self.dataset_intra.raw_data.get_data()
-
-        LFP_cropped = LFP_array[:, int(index_start_LFP) :].T
-        LFP_df_offset = pd.DataFrame(LFP_cropped)
-        LFP_df_offset.columns = self.dataset_intra.ch_names
-        LFP_timescale_offset_s = self.dataset_intra.times[int(index_start_LFP):] - time_start_LFP_0
-
-        # Save as pickle file:
-        LFP_df_offset["sf_LFP"] = self.dataset_intra.sf
-        LFP_df_offset["time_stamp"] = LFP_timescale_offset_s
-        lfp_title = ("SYNCHRONIZED_INTRACRANIAL_" + str(self.dataset_intra.file_name[:-4]) + ".pkl")
-        if self.folder_path is not None:
-            LFP_filename = join(self.folder_path, lfp_title)
-        else: LFP_filename = lfp_title
-        # Save the dataset to a pickle file
-        with open(LFP_filename, "wb") as file:
-            pickle.dump(LFP_df_offset, file)
-
-
-        ## External##
-        stream_names = []
-        stream_ids = []
-        streams_dict = {}
-
-        filepath = join(self.dataset_extra.file_path, self.dataset_extra.file_name)
-        xdf_datas = XdfData(filepath).resolve_streams()
-
-        for streams in range(1, len(xdf_datas['name'])+1, 1):
-            stream_names.append(xdf_datas['name'][streams])
-
-        for name in stream_names:
-            stream_ids.append(xdf_datas[xdf_datas['name'] == name].index[0])
-
-        for stream_nb in zip(stream_names, stream_ids):
-            # create a dictionnary associating each streaming name from stream_names list to its corresponding stream_id:
-            streams_dict[stream_nb[0]] = stream_nb[1]
-
-        # LOAD ALL STREAMS IN A DICTIONNARY
-
-        streams = {}
-
-        for idx, (name, stream_id) in enumerate(streams_dict.items(), start=1):
-            stream_name = f"{name}_stream"
-            streams[stream_name] = XdfData(filepath).load(stream_id=[stream_id])
-
-        # CREATE GLOBAL VARIABLES FOR EACH STREAM
-        for stream_name, stream_data in streams.items():
-            globals()[stream_name] = stream_data.data()
-            print(stream_name)
-
-        # Convert self.dataset_extra.art_start into the xdf timescale from the BIP data
-        art_start_0 = self.dataset_extra.art_start - 1
-        # Get the original timestamps from both sources
-        timestamps_global = globals()['SAGA_stream']['time_stamp']
-        times_real = self.dataset_extra.times
-
-        # Find the index in self.dataset_extra.times corresponding to art_start_0
-        art_start_index = (times_real >= art_start_0).argmax()
-
-        # Filter the timestamps from the global clock based on this index
-        filtered_timestamps_global = timestamps_global[art_start_index:]
-        art_start_in_globals = np.array(filtered_timestamps_global.iloc[0])
-        print(f"Art start in global timestamps: {art_start_in_globals}")
-
-
-        # Iterate over the dynamically created variables
-        for stream_name in streams.keys():
-            # Find the index corresponding to the value of art_start_in_globals
-            index = np.argmax(globals()[stream_name]['time_stamp'] >= art_start_in_globals)
-            print(f"Index corresponding to art_start_in_globals in {stream_name}: {index}")
-            
-            # Crop the stream data from the index onwards
-            stream_offset = globals()[stream_name].iloc[index:]
-            
-            # Create a copy of the cropped stream data
-            stream_offset_copy = stream_offset.copy()
-            
-            # Offset the 'time_stamp' column
-            stream_offset_copy['time_stamp'] = stream_offset_copy['time_stamp'] - art_start_in_globals
-            
-            # Reset the index
-            stream_offset_copy.reset_index(drop=True, inplace=True)
-            
-            # Update the global variable with the modified data
-            globals()[stream_name] = stream_offset_copy
-
-        # Create a dictionary to hold the extracted DataFrames
-        extracted_streams = {}
-
-        # Iterate over the dynamically created variables
-        for stream_name in streams.keys():
-            # Extract the current stream DataFrame
-            extracted_streams[f"df_{stream_name}"] = globals()[stream_name].copy()
-
-        ## saving as pickle:
-        # Iterate over the extracted DataFrames
-        for df_name, df_data in extracted_streams.items():
-            # Generate the filename
-            external_title = (f"{df_name}SYNCHRONIZED_EXTERNAL_" + str(self.dataset_extra.file_name[:-4]) + ".pkl")
-            # Create the full path to the file
-            if self.folder_path is not None:
-                filepath = join(self.folder_path, external_title)
-            else:
-                filepath = external_title
-            # Save the DataFrame to a pickle file
-            df_data.to_pickle(filepath)
-        QMessageBox.information(self, "Synchronization", "Synchronization done. All files saved separately as .pickle")
-
-
-
-    def synchronize_datasets_as_one_pickle(self):
-        ## Intracranial ##
-        # Crop beginning of LFP intracranial recording 1 second before first artifact:
-        time_start_LFP_0 = self.dataset_intra.art_start - 1  # 1s before first artifact
-        index_start_LFP = time_start_LFP_0 * (self.dataset_intra.sf)
-
-        LFP_array = self.dataset_intra.raw_data.get_data()
-
-        LFP_cropped = LFP_array[:, int(index_start_LFP) :].T
-        LFP_df_offset = pd.DataFrame(LFP_cropped)
-        LFP_df_offset.columns = self.dataset_intra.ch_names
-        LFP_timescale_offset_s = self.dataset_intra.times[int(index_start_LFP):] - time_start_LFP_0
-
-        # Prepare LFP dataframe
-        LFP_df_offset["sf_LFP"] = self.dataset_intra.sf
-        LFP_df_offset["time_stamp"] = LFP_timescale_offset_s
-
-
-        ## External ##
-        stream_names = []
-        stream_ids = []
-        streams_dict = {}
-
-        filepath = join(self.dataset_extra.file_path, self.dataset_extra.file_name)
-        xdf_datas = XdfData(filepath).resolve_streams()
-
-        for streams in range(1, len(xdf_datas['name'])+1, 1):
-            stream_names.append(xdf_datas['name'][streams])
-
-        for name in stream_names:
-            stream_ids.append(xdf_datas[xdf_datas['name'] == name].index[0])
-
-        for stream_nb in zip(stream_names, stream_ids):
-            # create a dictionnary associating each streaming name from stream_names list to its corresponding stream_id:
-            streams_dict[stream_nb[0]] = stream_nb[1]
-
-        # LOAD ALL STREAMS IN A DICTIONNARY
-        streams = {}
-
-        for idx, (name, stream_id) in enumerate(streams_dict.items(), start=1):
-            stream_name = f"{name}_stream"
-            streams[stream_name] = XdfData(filepath).load(stream_id=[stream_id])
-
-        # CREATE GLOBAL VARIABLES FOR EACH STREAM
-        for stream_name, stream_data in streams.items():
-            globals()[stream_name] = stream_data.data()
-            print(stream_name)
-
-        # Convert self.dataset_extra.art_start into the xdf timescale from the BIP data
-        art_start_0 = self.dataset_extra.art_start - 1
-        # Get the original timestamps from both sources
-        timestamps_global = globals()['SAGA_stream']['time_stamp']
-        times_real = self.dataset_extra.times
-
-        # Find the index in self.dataset_extra.times corresponding to art_start_0
-        art_start_index = (times_real >= art_start_0).argmax()
-
-        # Filter the timestamps from the global clock based on this index
-        filtered_timestamps_global = timestamps_global[art_start_index:]
-        art_start_in_globals = np.array(filtered_timestamps_global.iloc[0])
-        print(f"Art start in global timestamps: {art_start_in_globals}")
-
-
-        # Iterate over the dynamically created variables
-        for stream_name in streams.keys():
-            # Find the index corresponding to the value of art_start_in_globals
-            index = np.argmax(globals()[stream_name]['time_stamp'] >= art_start_in_globals)
-            print(f"Index corresponding to art_start_in_globals in {stream_name}: {index}")
-
-            # Crop the stream data from the index onwards
-            stream_offset = globals()[stream_name].iloc[index:]
-
-            # Create a copy of the cropped stream data
-            stream_offset_copy = stream_offset.copy()
-
-            # Offset the 'time_stamp' column
-            stream_offset_copy['time_stamp'] = stream_offset_copy['time_stamp'] - art_start_in_globals
-            
-            # Reset the index
-            stream_offset_copy.reset_index(drop=True, inplace=True)
-            
-            # Update the global variable with the modified data
-            globals()[stream_name] = stream_offset_copy
-
-        # Create a dictionary to hold the extracted DataFrames
-        extracted_streams = {}
-
-        # Iterate over the dynamically created variables
-        for stream_name in streams.keys():
-            # Extract the current stream DataFrame
-            extracted_streams[f"df_{stream_name}"] = globals()[stream_name].copy()
-
-
-        # Iterate over the extracted DataFrames
-        for df_name, df_data in extracted_streams.items():
-            # Create separate DataFrame variables with specific names
-            globals()[df_name] = pd.DataFrame(df_data)
-
-
-        # Create an empty list to hold the DataFrames
-        all_dfs = []
-
-        # Iterate over the extracted DataFrames
-        for df_name, df_data in extracted_streams.items():
-            # Create a DataFrame with a MultiIndex containing the df_name as the top level
-            df = pd.DataFrame(df_data)
-            df.columns = pd.MultiIndex.from_product([[df_name], df.columns])  # Add df_name as the top level of column index
-            all_dfs.append(df)
-
-        # Concatenate all DataFrames in the list along axis 1 (columns)
-        LSL_df = pd.concat(all_dfs, axis=1)
-
-        # Assuming LFP_df_offset is your new DataFrame
-        # First, adjust its column names to include a MultiIndex with the header 'LFP'
-        LFP_df_offset.columns = pd.MultiIndex.from_product([['df_LFP'], LFP_df_offset.columns])
-
-        # Concatenate LFP_df_offset on top of big_df along axis 1 (columns)
-        final_df = pd.concat([LFP_df_offset, LSL_df], axis=1)
-        
-        ## saving as pickle:
-        # Generate the filename
-        filename = f"{self.dataset_extra.file_name[:-4]}_synchronized_data.pkl"
-        # Create the full path to the file
-        if self.folder_path is not None:
-            filepath = join(self.folder_path, filename)
-        else:
-            filepath = filename
-        # Save the DataFrame to a pickle file
-        final_df.to_pickle(filepath)
-        print(f"DataFrame {filename} saved as pickle to {filepath}")
-        QMessageBox.information(self, "Synchronization", "Synchronization done. Everything saved as one .pickle file")
-
-
-
-    def synchronize_datasets_as_mat(self):
-        index_start_LFP = (self.dataset_intra.art_start - 1) * self.dataset_intra.sf
-        LFP_array = self.dataset_intra.raw_data.get_data()
-        LFP_cropped = LFP_array[:, int(index_start_LFP) :].T
-
-        ## External ##
-        # Crop beginning of external recordings 1s before first artifact:
-        time_start_external = (self.dataset_extra.art_start) - 1
-        index_start_external = time_start_external * self.dataset_extra.sf
-        external_file = self.dataset_extra.raw_data.get_data()
-        external_cropped = external_file[:, int(index_start_external) :].T
-
-        # Check which recording is the longest,
-        # crop it to give it the same duration as the other one:
-        LFP_rec_duration = len(LFP_cropped) / self.dataset_intra.sf
-        external_rec_duration = len(external_cropped) / self.dataset_extra.sf
-
-        if LFP_rec_duration > external_rec_duration:
-            index_stop_LFP = external_rec_duration * self.dataset_intra.sf
-            LFP_synchronized = LFP_cropped[: int(index_stop_LFP), :]
-            external_synchronized = external_cropped
-        elif external_rec_duration > LFP_rec_duration:
-            index_stop_external = LFP_rec_duration * self.dataset_extra.sf
-            external_synchronized = external_cropped[: int(index_stop_external), :]
-            LFP_synchronized = LFP_cropped
-        else:
-            LFP_synchronized = LFP_cropped
-            external_synchronized = external_cropped  
-
-        # save the synchronized data in mat format          
-        LFP_df_offset = pd.DataFrame(LFP_synchronized)
-        LFP_df_offset.columns = self.dataset_intra.ch_names
-        external_df_offset = pd.DataFrame(external_synchronized)
-        external_df_offset.columns = self.dataset_extra.ch_names
-
-        lfp_title = ("SYNCHRONIZED_INTRACRANIAL_" + str(self.dataset_intra.file_name[:-4]) + ".mat")
-        external_title = (f"SYNCHRONIZED_EXTERNAL_" + str(self.dataset_extra.file_name[:-6]) + ".mat")
-        
-        if self.folder_path is not None:
-            LFP_filename = join(self.folder_path, lfp_title)
-            external_filename = join(self.folder_path, external_title)
-        else:
-            LFP_filename = lfp_title
-            external_filename = external_title
-
-        savemat(
-            LFP_filename,
-            {
-                "data": LFP_df_offset.T,
-                "fsample": self.dataset_intra.sf,
-                "label": np.array(
-                    LFP_df_offset.columns.tolist(), dtype=object
-                ).reshape(-1, 1),
-            },
-        )
-        savemat(
-            external_filename,
-            {
-                "data": external_df_offset.T,
-                "fsample": self.dataset_extra.sf,
-                "label": np.array(
-                    external_df_offset.columns.tolist(), dtype=object
-                ).reshape(-1, 1),
-            },
-        )
-        QMessageBox.information(self, "Synchronization", "Synchronization done. Both files saved as .mat files")       
-
-
-
-
-        #######################################################################
-        #                      SYNCHRONIZATION FUNCTIONS                      #
-        #######################################################################
-
-    def detect_artifacts_intra(self):
-        thres_window = round(self.dataset_intra.sf * 2)
-        data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index]
-        thres = np.ptp(data[:thres_window])
-        # Compute absolute value to be invariant to the polarity of the signal
-        abs_data = np.abs(data)
-        # Check where the data exceeds the threshold
-        over_thres = np.where(abs_data[0:] > thres)[0][0]
-        # Take last sample that lies within the value distribution of the thres_window 
-        # before the threshold passing, and add 4 samples
-        # The percentile is something that can be varied
-        stim_idx = (np.where(
-            abs_data[:over_thres] <= np.percentile(abs_data[:over_thres], 95)
-        )[0][-1]) + 4
-        self.dataset_intra.art_start = stim_idx / self.dataset_intra.sf
-        print(f"Artifact detected in LFP data at time: {self.dataset_intra.art_start} s")
-        self.plot_scatter_channel_intra(art_start_intra = self.dataset_intra.art_start)
-        self.update_synchronize_button_state()  # Check if we can enable the button
-        self.label_automatic_artifact_time_intra.setText(f"Artifact start: {self.dataset_intra.art_start} s")
-
-
-    def manual_selection_intra(self):
-        self.toolbar_intra.setEnabled(True)
-        self.canvas_intra.setEnabled(True)
-        self.ax_intra.clear()
-        data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index]
-        timescale = self.dataset_intra.times
-
-        pos = []
-
-        self.ax_intra.scatter(timescale, data, s=8)
-        self.canvas_intra.draw()
-        self.ax_intra.set_title(
-            'Right click on the plot to select the start of the artifact (shown by the black "+")'
-        )
-
-        (plus_symbol,) = self.ax_intra.plot([], [], "k+", markersize=10)
-
-        def onclick(event):
-            if event.inaxes is not None:  # Check if the click is inside the axes
-                if event.button == MouseButton.RIGHT:
-                    pos.append([event.xdata, event.ydata])
-
-                    # Update the position of the black "+" symbol
-                    closest_index_x = np.argmin(np.abs(timescale - event.xdata))
-                    closest_value_x = timescale[closest_index_x]
-                    closest_value_y = data[closest_index_x]
-                    plus_symbol.set_data([closest_value_x], [closest_value_y])
-                    self.canvas_intra.draw()
-                    self.dataset_intra.art_start = closest_value_x
-                    self.label_manual_artifact_time_intra.setText(f"Selected Artifact start: {closest_value_x} s")
-                    self.update_synchronize_button_state()
-
-        self.canvas_intra.mpl_connect("button_press_event", onclick)
-
-    def detect_artifacts_xdf(self):
-        """Detect artifacts in .xdf data."""
-        channel_data = self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index]
-        b, a = scipy.signal.butter(1, 0.05, "highpass")
-        chan_data_detrend = scipy.signal.filtfilt(b, a, channel_data)        
-        self.dataset_extra.art_start = find_external_sync_artifact(data=chan_data_detrend, sf_external=self.dataset_extra.sf, times = self.dataset_extra.times, start_index=0)
-        print(f"Artifact detected in BIP data at time: {self.dataset_extra.art_start} s")
-        self.label_automatic_artifact_time_xdf.setText(f"Artifact start detected at: {self.dataset_extra.art_start} s")
-
-        # Plot the channel with artifact
-        self.plot_scatter_channel_xdf(art_start_BIP=self.dataset_extra.art_start)
-        self.update_synchronize_button_state()  # Check if we can enable the button
-
-
-    def manual_selection_xdf(self):
-        self.toolbar_xdf.setEnabled(True)
-        self.canvas_xdf.setEnabled(True)
-        self.ax_xdf.clear()
-        data = self.dataset_extra.raw_data.get_data()[self.dataset_extra.selected_channel_index]
-        b, a = scipy.signal.butter(1, 0.05, "highpass")
-        channel_data_to_plot = scipy.signal.filtfilt(b, a, data)
-        timescale = self.dataset_extra.times
-
-        pos = []
-
-        self.ax_xdf.scatter(timescale, channel_data_to_plot, s=8)
-        self.canvas_xdf.draw()
-        self.ax_xdf.set_title(
-            'Right click on the plot to select the start of the artifact (shown by the black "+")'
-        )
-
-        (plus_symbol,) = self.ax_xdf.plot([], [], "k+", markersize=10)
-
-        def onclick(event):
-            if event.inaxes is not None:  # Check if the click is inside the axes
-                if event.button == MouseButton.RIGHT:
-                    pos.append([event.xdata, event.ydata])
-
-                    # Update the position of the black "+" symbol
-                    closest_index_x = np.argmin(np.abs(timescale - event.xdata))
-                    closest_value_x = timescale[closest_index_x]
-                    closest_value_y = channel_data_to_plot[closest_index_x]
-                    plus_symbol.set_data([closest_value_x], [closest_value_y])
-                    self.canvas_xdf.draw()
-                    self.dataset_extra.art_start = closest_value_x
-                    self.label_manual_artifact_time_xdf.setText(f"Selected Artifact start: {closest_value_x} s")
-                    self.update_synchronize_button_state()
-
-        self.canvas_xdf.mpl_connect("button_press_event", onclick)
-        
-    
-    def select_last_artifact_intra(self):
-        # Check if we're already in external selection mode and prevent interference
-        if hasattr(self, 'cid_extra') and self.cid_extra is not None:
-            self.canvas_synced.mpl_disconnect(self.cid_extra)
-            self.cid_extra = None
-
-        pos_intra = []
-
-        self.ax_synced.set_title(
-            'Right click on the plot to select the start of the last artifact in the intracranial recording (shown by the black "+")'
-        )
-        self.canvas_synced.draw()
-
-        # Create or update the intracranial "+" symbol
-        if not hasattr(self, 'plus_symbol_intra'):
-            self.plus_symbol_intra, = self.ax_synced.plot([], [], "k+", markersize=10)
-
-        # Disconnect previous intracranial event listener, if any
-        if hasattr(self, 'cid_intra') and self.cid_intra is not None:
-            self.canvas_synced.mpl_disconnect(self.cid_intra)
-
-        # Define the click handler for the intracranial selection
-        def onclick(event_intra):
-            if event_intra.inaxes is not None:  # Check if the click is inside the axes
-                if event_intra.button == MouseButton.RIGHT:
-                    pos_intra.append([event_intra.xdata, event_intra.ydata])
-
-                    closest_index_x_intra = np.argmin(np.abs(self.dataset_intra.reset_timescale - event_intra.xdata))
-                    closest_value_x_intra = self.dataset_intra.reset_timescale[closest_index_x_intra]
-                    closest_value_y_intra = self.dataset_intra.reset_data[closest_index_x_intra]
-                    self.plus_symbol_intra.set_data([closest_value_x_intra], [closest_value_y_intra])
-                    self.canvas_synced.draw()
-
-                    self.dataset_intra.last_artifact = closest_value_x_intra
-                    self.label_select_last_art_intra.setText(f"Selected last artifact start: {self.dataset_intra.last_artifact} s")
-                    self.update_timeshift_button_state()
-
-        # Connect and store the ID of the intracranial event listener
-        self.cid_intra = self.canvas_synced.mpl_connect("button_press_event", onclick)
-        
-
-
-    def select_last_artifact_ext(self):
-        # Check if we're already in intracranial selection mode and prevent interference
-        if hasattr(self, 'cid_intra') and self.cid_intra is not None:
-            self.canvas_synced.mpl_disconnect(self.cid_intra)
-            self.cid_intra = None
-
-        pos_extra = []
-
-        self.ax_synced.set_title(
-            'Right click on the plot to select the start of the last artifact in the external recording (shown by the red "+")'
-        )
-        self.canvas_synced.draw()
-
-        # Create or update the external "+" symbol
-        if not hasattr(self, 'plus_symbol_extra'):
-            self.plus_symbol_extra, = self.ax_synced.plot([], [], "r+", markersize=10)
-
-        # Disconnect previous external event listener, if any
-        if hasattr(self, 'cid_extra') and self.cid_extra is not None:
-            self.canvas_synced.mpl_disconnect(self.cid_extra)
-
-        # Define the click handler for the external selection
-        def onclick(event_extra):
-            if event_extra.inaxes is not None:  # Check if the click is inside the axes
-                if event_extra.button == MouseButton.RIGHT:
-                    pos_extra.append([event_extra.xdata, event_extra.ydata])
-
-                    closest_index_x_extra = np.argmin(np.abs(self.dataset_extra.reset_timescale - event_extra.xdata))
-                    closest_value_x_extra = self.dataset_extra.reset_timescale[closest_index_x_extra]
-                    closest_value_y_extra = self.dataset_extra.reset_data[closest_index_x_extra]
-                    self.plus_symbol_extra.set_data([closest_value_x_extra], [closest_value_y_extra])
-                    self.canvas_synced.draw()
-
-                    self.dataset_extra.last_artifact = closest_value_x_extra
-                    self.label_select_last_art_xdf.setText(f"Selected last artifact start: {self.dataset_extra.last_artifact} s")
-                    self.update_timeshift_button_state()
-        # Connect and store the ID of the external event listener
-        self.cid_extra = self.canvas_synced.mpl_connect("button_press_event", onclick)
-        
-
-
-    def compute_timeshift(self):
-        timeshift = (self.dataset_extra.last_artifact - self.dataset_intra.last_artifact)*1000
-        self.label_timeshift.setText(f"Timeshift: {timeshift} ms")
-
-
-    def compute_eff_sf(self):
-        time_interval = self.dataset_extra.last_art_start_time - self.dataset_extra.first_art_start_time
-        print(f"time interval: {time_interval}")
-        sample_interval = self.dataset_intra.last_art_start_idx - self.dataset_intra.first_art_start_idx
-        print(f"sample interval: {sample_interval}")
-        self.dataset_intra.eff_sf = sample_interval/time_interval
-        self.dataset_intra.sf = self.dataset_intra.eff_sf
-        self.dataset_intra.times = np.linspace(0, self.dataset_intra.raw_data.get_data().shape[1]/self.dataset_intra.sf, self.dataset_intra.raw_data.get_data().shape[1])
-        print(f"eff_sf: {self.dataset_intra.eff_sf}")
-        self.label_eff_sf.setText(f"The effective sampling frequency of the intracranial recording is actually {self.dataset_intra.eff_sf} and will be used for synchronization.")
-
-
-    def update_synchronize_button_state(self):
-        """Enable or disable the synchronize button based on file selection."""
-        if self.dataset_intra.art_start is not None and self.dataset_extra.art_start is not None:
-            self.button_confirm_sync.setEnabled(True)
-        else:
-            self.button_confirm_sync.setEnabled(False)
-            self.btn_sync_as_set.setEnabled(False)
-            #self.btn_sync_as_pickle.setEnabled(False)
-            #self.btn_all_as_pickle.setEnabled(False)
-            #self.btn_sync_as_mat.setEnabled(False)
-
-
-
-
-
         #######################################################################
         #                       STATE UPDATE FUNCTIONS                        #
         #######################################################################
@@ -2644,1547 +1435,16 @@ class SyncGUI(QMainWindow):
             button.style().unpolish(button)
             button.style().polish(button)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        #######################################################################
-        #                         ECG CLEANING FUNCTIONS                      #
-        #######################################################################
-
-        #######################################################################
-        #########                  INTERPOLATION METHOD               #########
-        #######################################################################        
-
-    def start_ecg_cleaning_interpolation(self):
-        """Start the ECG cleaning process using the interpolation method from Perceive toolbox."""
-        if self.dataset_intra.raw_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
-            # Perform the ECG cleaning process here
-            try:
-                self.clean_ecg_interpolation_no_ext()
-
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
-                
-
-    def clean_ecg_interpolation_no_ext(self):
-        full_data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
-        times = self.dataset_intra.raw_data.times
-        start_rec = self.dataset_intra.start_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.start_time_right
-        end_rec = self.dataset_intra.end_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.end_time_right
-        sf_lfp= round(self.dataset_intra.raw_data.info['sfreq'])
-        if self.dataset_intra.artifact_polarity == "down":
-            REVERSED = True # true if cardiac artifacts are going downwards
+    def update_synchronize_button_state(self):
+        """Enable or disable the synchronize button based on file selection."""
+        if self.dataset_intra.art_start is not None and self.dataset_extra.art_start is not None:
+            self.button_confirm_sync.setEnabled(True)
         else:
-            REVERSED = False
-
-        # crop data to remove sync pulses (amplitude is too big, it messes with template detection)
-        data_crop = full_data[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
-        # keep beginning and end:
-        beginning_part = full_data[:int(start_rec*sf_lfp)]
-        end_part = full_data[int(end_rec*sf_lfp):]
-
-        times_crop = times[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
-        
-        if REVERSED:
-            cropped_data = - data_crop
-            full_data = - full_data
-        else:
-            cropped_data = data_crop
-            full_data = full_data
-
-        ecg = {'proc': {}, 'stats': {}, 'cleandata': None, 'detected': False}
-        ns = len(cropped_data)
-        
-        # Segment the signal into overlapping windows
-        dwindow = int(round(sf_lfp))  # 1s window
-        dmove = sf_lfp  # 1s step
-        n_segments = (ns - dwindow) // dmove + 1
-        
-        x = np.array([cropped_data[i * dmove: i * dmove + dwindow] for i in range(n_segments) if i * dmove + dwindow <= ns])
-        
-        detected_peaks = []  # Store peak indices in the original timescale
-        
-        # Loop through each segment and find peaks
-        for i in range(n_segments):
-            segment = x[i]
-            peaks, _ = scipy.signal.find_peaks(segment, height=np.percentile(segment, 90), distance=sf_lfp//2)  # Adjust threshold & min distance
-            real_peaks = peaks + (i * dmove)  # Convert to original timescale
-            detected_peaks.extend(real_peaks)
-
-        detected_peaks = np.array(detected_peaks)
-        
-        # Define epoch window (-0.5s to +0.5s)
-        pre_samples = int(0.5 * sf_lfp)
-        post_samples = int(0.5 * sf_lfp)
-        epoch_length = pre_samples + post_samples  # Total length of each epoch
-
-        epochs = []  # Store extracted heartbeats
-
-        for peak in detected_peaks:
-            start = peak - pre_samples
-            end = peak + post_samples
-            
-            if start >= 0 and end < ns:  # Ensure we don't go out of bounds
-                epochs.append(cropped_data[start:end])
-
-        epochs = np.array(epochs)
-
-        # Compute average heartbeat template
-        mean_epoch = np.mean(epochs, axis=0)
-        ecg['proc']['template1'] = mean_epoch  # First ECG template
-
-        # Plot the detected ECG epochs
-        time = np.linspace(-0.5, 0.5, epoch_length)  # Time in seconds
-
-        self.canvas_ecg_artifact.setEnabled(True)
-        self.toolbar_ecg_artifact.setEnabled(True)
-        self.ax_ecg_artifact.clear()
-        self.ax_ecg_artifact.set_title("Detected ECG epochs")
-
-        for epoch in epochs:
-            if REVERSED:
-                epoch = -epoch
-            self.ax_ecg_artifact.plot(time, epoch, color='gray', alpha=0.3)
-        
-        if REVERSED:
-            mean_epoch = - mean_epoch
-
-        self.ax_ecg_artifact.plot(time, mean_epoch, color='red', linewidth=2, label='Average ECG Template')
-        self.ax_ecg_artifact.set_xlabel("Time (s)")
-        self.ax_ecg_artifact.set_ylabel("Amplitude")
-        self.ax_ecg_artifact.legend()
-        self.canvas_ecg_artifact.draw()
-
-
-        # Temporal correlation for ECG detection
-        r = np.correlate(cropped_data, ecg['proc']['template1'], mode='same')
-        threshold = np.percentile(r, 95)
-        detected_peaks, _ = scipy.signal.find_peaks(r, height=threshold)
-
-        if len(detected_peaks) < 5:
-            return ecg  # Not enough peaks detected
-
-        ecg['proc']['r'] = r
-        ecg['proc']['thresh'] = threshold
-
-        # Second pass for refining detection
-        refined_template = np.mean([cropped_data[p - dwindow//2 : p + dwindow//2] for p in detected_peaks if p - dwindow//2 > 0 and p + dwindow//2 < ns], axis=0)
-        ecg['proc']['template2'] = refined_template
-        r2 = np.correlate(cropped_data, refined_template, mode='same')
-        threshold2 = np.percentile(r2, self.dataset_intra.ecg_thresh)
-        final_peaks, _ = scipy.signal.find_peaks(r2, height=threshold2, distance=sf_lfp//2)
-
-        ecg['proc']['r2'] = r2
-        ecg['proc']['thresh2'] = threshold2
-
-        # Estimate HR
-        peak_intervals = np.diff(final_peaks) / sf_lfp  # Convert to seconds
-        hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
-        ecg['stats']['hr'] = hr
-        ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
-        self.label_heart_rate_lfp.setText(f'Heart rate: {hr} bpm')
-
-        # Check ECG detection validity
-        if 55 <= hr <= 120 and len(final_peaks) > 10:
-            ecg['detected'] = True
-
-        # Remove artifacts (simple interpolation)
-        clean_data = np.copy(cropped_data)
-        for p in final_peaks:
-            clean_data[max(0, p - 5): min(ns, p + 5)] = np.nan  # NaN out artifacts
-        clean_data = np.interp(np.arange(ns), np.arange(ns)[~np.isnan(clean_data)], clean_data[~np.isnan(clean_data)])
-
-        if REVERSED:
-            full_data = - full_data
-            clean_data = - clean_data
-
-        clean_data_full = np.concatenate([beginning_part, clean_data, end_part])
-        ecg['cleandata'] = clean_data_full
-
-        if self.dataset_intra.selected_channel_index_ecg == 0:
-            self.dataset_intra.cleaned_ecg_left = clean_data_full
-            self.dataset_intra.detected_peaks_left = final_peaks
-            self.dataset_intra.mean_epoch_left = mean_epoch
-            self.dataset_intra.epochs_left = epochs
-            print("Left channel cleaned")
-
-        elif self.dataset_intra.selected_channel_index_ecg == 1:
-            self.dataset_intra.cleaned_ecg_right = clean_data_full
-            self.dataset_intra.detected_peaks_right = final_peaks
-            self.dataset_intra.mean_epoch_right = mean_epoch
-            self.dataset_intra.epochs_right = epochs
-            print("Right channel cleaned")
-
-        # plot the detected peaks
-        self.canvas_detected_peaks.setEnabled(True)
-        self.toolbar_detected_peaks.setEnabled(True)
-        self.ax_detected_peaks.clear()
-        self.ax_detected_peaks.set_title('Detected Peaks')
-        if REVERSED:
-            self.ax_detected_peaks.plot(- cropped_data, label='Raw ECG')
-            self.ax_detected_peaks.plot(final_peaks, - cropped_data[final_peaks], 'ro', label='Detected Peaks')
-            self.canvas_detected_peaks.draw()
-        else:
-            self.ax_detected_peaks.plot(cropped_data, label='Raw ECG')
-            self.ax_detected_peaks.plot(final_peaks, cropped_data[final_peaks], 'ro', label='Detected Peaks')
-            self.canvas_detected_peaks.draw()            
-    
-        #plot an overlap of the raw and cleaned data
-        self.canvas_ecg_clean.setEnabled(True)
-        self.toolbar_ecg_clean.setEnabled(True)
-        self.ax_ecg_clean.clear()
-        self.ax_ecg_clean.set_title("Cleaned ECG Signal")
-        self.ax_ecg_clean.plot(times,full_data, label='Raw data')
-        self.ax_ecg_clean.plot(times,clean_data_full, label='Cleaned data')
-        self.ax_ecg_clean.set_xlabel("Time (s)")
-        self.ax_ecg_clean.set_ylabel("Amplitude")
-        self.ax_ecg_clean.legend()
-        self.canvas_ecg_clean.draw()
-
-        self.btn_confirm_cleaning.setEnabled(True)  # Enable the button after cleaning
-
-
-    def start_ecg_cleaning_interpolation_with_ext(self):
-        """Start the ECG cleaning process using the interpolation method from Perceive toolbox."""
-        if self.dataset_intra.synced_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
-            # Perform the ECG cleaning process here
-            try:
-                self.clean_ecg_interpolation_with_ext()
-
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
-                
-    def clean_ecg_interpolation_with_ext(self):
-        #### FIRST STEP: PREDETERMINE R-PEAKS TIMESTAMPS USING ECG CHANNEL ####
-        """ The externally recorded ECG signal was used to predetermine
-        the timestamps of the R-peaks. The ECG signal was z-scored ((x-l)/r) 
-        over the entire recording and the function findpeaks was used to search 
-        for R-peaks with a specific height (at least two and-a-half times 
-        the standard deviation of the entire time series) and at a 
-        specific inter-peak distance (minimally 500 ms). 
-        The algorithm accounts for a negative QRS complex
-        by repeating this procedure after multiplying the signal with
-        1. For both orientations of the LFP signal, the values of the
-        peaks were averaged and the peaks with the highest mean
-        determined the orientation of the QRS complexes, provided
-        that at least the same amount of peaks were detected.
-        """
-        data_extra = self.dataset_extra.synced_data.get_data()[self.dataset_extra.selected_channel_index_ecg]
-        #data_extra_scaled = data_extra * y_max_factor
-        data_extra_scaled = data_extra
-
-        # Apply 0.1 Hz-100Hz band-pass filter to ECG data
-        b, a = scipy.signal.butter(1, 0.05, "highpass")
-        detrended_data = scipy.signal.filtfilt(b, a, data_extra_scaled)
-        low_cutoff = 100.0  # Hz
-        b2, a2 = scipy.signal.butter(
-            N=4,  # Filter order
-            Wn=low_cutoff,
-            btype="lowpass",
-            fs=self.dataset_extra.sf 
-        )
-        ecg_data = scipy.signal.filtfilt(b2, a2, detrended_data)
-        timescale_extra = np.linspace(0, self.dataset_extra.synced_data.get_data().shape[1]/self.dataset_extra.sf, self.dataset_extra.synced_data.get_data().shape[1])
-
-        # 1. Z-score the ECG signal
-        ecg_z = (ecg_data - np.mean(ecg_data)) / np.std(ecg_data)
-
-        # 2. Define peak detection params
-        threshold = 2.5  # 2.5 * std (signal is already z-scored)
-        min_distance_samples = int(0.5 * self.dataset_extra.sf)  # 500 ms in samples
-
-        # 3. Detect peaks in original signal
-        peaks_pos, props_pos = scipy.signal.find_peaks(
-            ecg_z,
-            height=threshold,
-            distance=min_distance_samples
-        )
-
-        # 4. Detect peaks in inverted signal
-        peaks_neg, props_neg = scipy.signal.find_peaks(
-            -ecg_z,
-            height=threshold,
-            distance=min_distance_samples
-        )
-
-        # 5. Compare polarity by mean peak amplitude
-        mean_pos = np.mean(props_pos['peak_heights']) if len(peaks_pos) > 0 else 0
-        mean_neg = np.mean(props_neg['peak_heights']) if len(peaks_neg) > 0 else 0
-
-        # 6. Select better polarity (also check similar number of peaks)
-        if len(peaks_pos) >= len(peaks_neg):
-            chosen_peaks = peaks_pos
-            orientation = 'positive'
-        else:
-            chosen_peaks = peaks_neg
-            orientation = 'negative'        
-
-        #### Plot the detected peaks ####
-        self.canvas_detected_peaks_with_ext.setEnabled(True)
-        self.toolbar_detected_peaks_with_ext.setEnabled(True)
-        self.ax_detected_peaks_with_ext.clear()
-        self.ax_detected_peaks_with_ext.set_title('Detected Peaks')
-        self.ax_detected_peaks_with_ext.plot(timescale_extra, ecg_data, label='Raw ECG', alpha=0.1)
-        self.ax_detected_peaks_with_ext.plot(timescale_extra[chosen_peaks], ecg_data[chosen_peaks], 'ro', label='Detected Peaks', alpha=0.1)
-        self.canvas_detected_peaks_with_ext.draw()
-
-
-        #### SECOND STEP: FIND CORRESPONDING R-PEAKS IN THE LFP SIGNAL ####
-        """ Subsequently, the LFP signal was searched for peaks using
-        numpy functions min and max in a window of 20 samples
-        prior and after the R-peaks found in the ECG signal. This
-        window was adopted in order to account for inaccuracies
-        in the synchronization of the LFP- and ECG signals. The absolute 
-        values of the peaks found with min and max were averaged and the peaks
-        with the highest absolute mean determined the orientation of the QRS 
-        complexes.
-        """
-
-        full_data = self.dataset_intra.synced_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
-        times = np.linspace(0, self.dataset_intra.synced_data.get_data().shape[1]/self.dataset_intra.sf, self.dataset_intra.synced_data.get_data().shape[1])
-        
-        #start_rec = self.dataset_intra.start_time_left_with_ext if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.start_time_right_with_ext
-        #end_rec = self.dataset_intra.end_time_left_with_ext if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.end_time_right_with_ext
-        """
-        For each ECG R-peak, search for LFP peaks (min and max) in ±20 LFP samples.
-        Returns:
-            selected_peaks: list of peak values (either all max or all min)
-            polarity: 'positive' or 'negative' QRS orientation in LFP
-        """
-        # Convert R-peaks from ECG samples to seconds
-        r_peak_times_sec = chosen_peaks / self.dataset_extra.sf
-
-        # Convert times to LFP sample indices
-        r_peaks_lfp_idx = np.round(r_peak_times_sec * self.dataset_intra.sf).astype(int)
-        print(r_peaks_lfp_idx)
-
-        window = 20  # ±20 LFP samples
-        max_peaks = []
-        min_peaks = []
-
-        for idx in r_peaks_lfp_idx:
-            start = max(idx - window, 0)
-            end = min(idx + window + 1, len(full_data))
-            segment = full_data[start:end]
-
-            if len(segment) > 0:
-                max_peaks.append(np.max(segment))
-                min_peaks.append(np.min(segment))
-
-        # Calculate mean absolute values
-        mean_abs_max = np.mean(np.abs(max_peaks)) if max_peaks else 0
-        mean_abs_min = np.mean(np.abs(min_peaks)) if min_peaks else 0
-        print(mean_abs_max)
-        print(mean_abs_min)
-
-        # Choose the orientation with the higher mean absolute amplitude
-        if mean_abs_max >= mean_abs_min:
-            selected_peaks = max_peaks
-            polarity = 'positive'
-            print(polarity)
-        else:
-            selected_peaks = min_peaks
-            polarity = 'negative'
-            print(polarity)
-
-        # Choose the orientation with the higher mean absolute amplitude
-        lfp_peak_indices = []
-        polarity = None
-        if mean_abs_max >= mean_abs_min:
-            polarity = 'positive'
-            for idx in r_peaks_lfp_idx:
-                start = max(idx - window, 0)
-                end = min(idx + window + 1, len(full_data))
-                segment = full_data[start:end]
-                local_max_idx = np.argmax(segment)
-                peak_global_idx = start + local_max_idx
-                lfp_peak_indices.append(peak_global_idx)
-        else:
-            polarity = 'negative'
-            for idx in r_peaks_lfp_idx:
-                start = max(idx - window, 0)
-                end = min(idx + window + 1, len(full_data))
-                segment = full_data[start:end]
-                local_min_idx = np.argmin(segment)
-                peak_global_idx = start + local_min_idx
-                lfp_peak_indices.append(peak_global_idx)
-
-        #### Plot the detected peaks ####
-        #self.canvas_detected_peaks_with_ext.setEnabled(True)
-        #self.toolbar_detected_peaks_with_ext.setEnabled(True)
-        #self.ax_detected_peaks_with_ext.clear()
-        #self.ax_detected_peaks_with_ext.set_title('Detected Peaks')
-        self.ax_detected_peaks_with_ext.plot(times, full_data, label='Raw LFP', color='black')
-        self.ax_detected_peaks_with_ext.plot(np.array(times)[lfp_peak_indices], np.array(full_data)[lfp_peak_indices], 'ro', label='LFP Peaks')
-        self.ax_detected_peaks.legend()
-        self.canvas_detected_peaks_with_ext.draw()
-
-        """
-        #sf_lfp= round(self.dataset_intra.sf)
-        if self.dataset_intra.artifact_polarity_with_ext == "down":
-            REVERSED = True # true if cardiac artifacts are going downwards
-        else:
-            REVERSED = False
-
-        # crop data to remove sync pulses (amplitude is too big, it messes with template detection)
-        data_crop = full_data[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
-        # keep beginning and end:
-        beginning_part = full_data[:int(start_rec*sf_lfp)]
-        end_part = full_data[int(end_rec*sf_lfp):]
-
-        times_crop = times[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
-        
-        if REVERSED:
-            cropped_data = - data_crop
-            full_data = - full_data
-        else:
-            cropped_data = data_crop
-            full_data = full_data
-
-        ecg = {'proc': {}, 'stats': {}, 'cleandata': None, 'detected': False}
-        ns = len(cropped_data)
-        
-        # Segment the signal into overlapping windows
-        dwindow = int(round(sf_lfp))  # 1s window
-        dmove = sf_lfp  # 1s step
-        n_segments = (ns - dwindow) // dmove + 1
-        
-        x = np.array([cropped_data[i * dmove: i * dmove + dwindow] for i in range(n_segments) if i * dmove + dwindow <= ns])
-        
-        detected_peaks = []  # Store peak indices in the original timescale
-        
-        # Loop through each segment and find peaks
-        for i in range(n_segments):
-            segment = x[i]
-            peaks, _ = scipy.signal.find_peaks(segment, height=np.percentile(segment, 90), distance=sf_lfp//2)  # Adjust threshold & min distance
-            real_peaks = peaks + (i * dmove)  # Convert to original timescale
-            detected_peaks.extend(real_peaks)
-
-        detected_peaks = np.array(detected_peaks)
-        """
-
-        # Create a ECG template #
-        # Define epoch window (-0.5s to +0.5s)
-        pre_samples = int(0.5 * self.dataset_intra.sf)
-        post_samples = int(0.5 * self.dataset_intra.sf)
-        epoch_length = pre_samples + post_samples  # Total length of each epoch
-
-        epochs = []  # Store extracted heartbeats
-
-        for peak in lfp_peak_indices:
-            start = peak - pre_samples
-            end = peak + post_samples
-            
-            if start >= 0 and end < len(full_data):  # Ensure we don't go out of bounds
-                epochs.append(full_data[start:end])
-
-        epochs = np.array(epochs)
-
-        # Compute average heartbeat template
-        mean_epoch = np.mean(epochs, axis=0)
-        #ecg['proc']['template1'] = mean_epoch  # First ECG template
-
-        # Plot the detected ECG epochs
-        time = np.linspace(-0.5, 0.5, epoch_length)  # Time in seconds
-
-        self.canvas_ecg_artifact_with_ext.setEnabled(True)
-        self.toolbar_ecg_artifact_with_ext.setEnabled(True)
-        self.ax_ecg_artifact_with_ext.clear()
-        self.ax_ecg_artifact_with_ext.set_title("Detected ECG epochs")
-
-        for epoch in epochs:
-        #    if REVERSED:
-        #        epoch = -epoch
-            self.ax_ecg_artifact_with_ext.plot(time, epoch, color='gray', alpha=0.3)
-        
-        #if REVERSED:
-        #    mean_epoch = - mean_epoch
-
-        self.ax_ecg_artifact_with_ext.plot(time, mean_epoch, color='red', linewidth=2, label='Average ECG Template')
-        self.ax_ecg_artifact_with_ext.set_xlabel("Time (s)")
-        self.ax_ecg_artifact_with_ext.set_ylabel("Amplitude")
-        self.ax_ecg_artifact_with_ext.legend()
-        self.canvas_ecg_artifact_with_ext.draw()
-
-        """
-        # Temporal correlation for ECG detection
-        r = np.correlate(cropped_data, ecg['proc']['template1'], mode='same')
-        threshold = np.percentile(r, 95)
-        detected_peaks, _ = scipy.signal.find_peaks(r, height=threshold)
-
-        if len(detected_peaks) < 5:
-            return ecg  # Not enough peaks detected
-
-        ecg['proc']['r'] = r
-        ecg['proc']['thresh'] = threshold
-
-        # Second pass for refining detection
-        refined_template = np.mean([cropped_data[p - dwindow//2 : p + dwindow//2] for p in detected_peaks if p - dwindow//2 > 0 and p + dwindow//2 < ns], axis=0)
-        ecg['proc']['template2'] = refined_template
-        r2 = np.correlate(cropped_data, refined_template, mode='same')
-        threshold2 = np.percentile(r2, self.dataset_intra.ecg_thresh_with_ext)
-        final_peaks, _ = scipy.signal.find_peaks(r2, height=threshold2, distance=sf_lfp//2)
-
-        ecg['proc']['r2'] = r2
-        ecg['proc']['thresh2'] = threshold2
-        """
-
-        # Estimate HR
-        peak_intervals = np.diff(lfp_peak_indices) / self.dataset_intra.sf  # Convert to seconds
-        hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
-        #ecg['stats']['hr'] = hr
-        #ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
-        self.label_heart_rate_lfp_with_ext.setText(f'Heart rate: {hr} bpm')
-
-        # Check ECG detection validity
-        #if 55 <= hr <= 120 and len(lfp_peak_indices) > 10:
-            #ecg['detected'] = True
-
-        # Remove artifacts (simple interpolation)
-        ns = len(full_data)
-        clean_data = np.copy(full_data)
-        for p in lfp_peak_indices:
-            clean_data[max(0, p - 5): min(ns, p + 5)] = np.nan  # NaN out artifacts
-        clean_data = np.interp(np.arange(ns), np.arange(ns)[~np.isnan(clean_data)], clean_data[~np.isnan(clean_data)])
-
-        """
-        if REVERSED:
-            full_data = - full_data
-            clean_data = - clean_data
-
-        clean_data_full = np.concatenate([beginning_part, clean_data, end_part])
-        ecg['cleandata'] = clean_data_full
-        """
-
-        if self.dataset_intra.selected_channel_index_ecg == 0:
-            self.dataset_intra.cleaned_ecg_left_with_ext = clean_data
-            self.dataset_intra.detected_peaks_left_with_ext = lfp_peak_indices
-            self.dataset_intra.mean_epoch_left_with_ext = mean_epoch
-            self.dataset_intra.epochs_left_with_ext = epochs
-            print("Left channel cleaned")
-
-        elif self.dataset_intra.selected_channel_index_ecg == 1:
-            self.dataset_intra.cleaned_ecg_right_with_ext = clean_data
-            self.dataset_intra.detected_peaks_right_with_ext = lfp_peak_indices
-            self.dataset_intra.mean_epoch_right_with_ext = mean_epoch
-            self.dataset_intra.epochs_right_with_ext = epochs
-            print("Right channel cleaned")
-
-        """
-        # plot the detected peaks
-        self.canvas_detected_peaks_with_ext.setEnabled(True)
-        self.toolbar_detected_peaks_with_ext.setEnabled(True)
-        self.ax_detected_peaks_with_ext.clear()
-        self.ax_detected_peaks_with_ext.set_title('Detected Peaks')
-        if REVERSED:
-            self.ax_detected_peaks_with_ext.plot(- cropped_data, label='Raw ECG')
-            self.ax_detected_peaks_with_ext.plot(final_peaks, - cropped_data[final_peaks], 'ro', label='Detected Peaks')
-            self.canvas_detected_peaks_with_ext.draw()
-        else:
-            self.ax_detected_peaks_with_ext.plot(cropped_data, label='Raw ECG')
-            self.ax_detected_peaks_with_ext.plot(final_peaks, cropped_data[final_peaks], 'ro', label='Detected Peaks')
-            self.canvas_detected_peaks_with_ext.draw()            
-        """
-
-        #plot an overlap of the raw and cleaned data
-        self.canvas_ecg_clean_with_ext.setEnabled(True)
-        self.toolbar_ecg_clean_with_ext.setEnabled(True)
-        self.ax_ecg_clean_with_ext.clear()
-        self.ax_ecg_clean_with_ext.set_title("Cleaned ECG Signal")
-        self.ax_ecg_clean_with_ext.plot(times,full_data, label='Raw data')
-        self.ax_ecg_clean_with_ext.plot(times,clean_data, label='Cleaned data')
-        self.ax_ecg_clean_with_ext.set_xlabel("Time (s)")
-        self.ax_ecg_clean_with_ext.set_ylabel("Amplitude")
-        self.ax_ecg_clean_with_ext.legend()
-        self.canvas_ecg_clean_with_ext.draw()
-
-        self.btn_confirm_cleaning_with_ext.setEnabled(True)  # Enable the button after cleaning
-
-        #######################################################################
-        #########              TEMPLATE SUBSTRACTION METHOD           #########
-        #######################################################################      
-
-
-    def start_ecg_cleaning_template_sub(self):
-        """Start the ECG cleaning process using the template substraction method."""
-        if self.dataset_intra.raw_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
-            # Perform the ECG cleaning process here
-            try:
-                self.clean_ecg_template_sub_no_ext()
-
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
-
-    def clean_ecg_template_sub_no_ext(self):
-        full_data = self.dataset_intra.raw_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
-        times = self.dataset_intra.raw_data.times
-        start_rec = self.dataset_intra.start_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.start_time_right
-        end_rec = self.dataset_intra.end_time_left if self.dataset_intra.selected_channel_index_ecg == 0 else self.dataset_intra.end_time_right
-        sf_lfp= round(self.dataset_intra.raw_data.info['sfreq'])
-        if self.dataset_intra.artifact_polarity == "down":
-            REVERSED = True # true if cardiac artifacts are going downwards
-        else:
-            REVERSED = False
-
-        # crop data to remove sync pulses (amplitude is too big, it messes with template detection)
-        data_crop = full_data[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
-        # keep beginning and end:
-        beginning_part = full_data[:int(start_rec*sf_lfp)]
-        end_part = full_data[int(end_rec*sf_lfp):]
-
-        times_crop = times[int(start_rec*sf_lfp):int(end_rec*sf_lfp)]
-        
-        if REVERSED:
-            cropped_data = - data_crop # make sure the artifact is going upward for the detection
-            full_data = - full_data # make sure the artifact is going upward for the detection
-        else:
-            cropped_data = data_crop
-            full_data = full_data
-
-        ecg = {'proc': {}, 'stats': {}, 'cleandata': None, 'detected': False}
-        ns = len(cropped_data)
-        
-        # Segment the signal into overlapping windows
-        dwindow = int(round(sf_lfp))  # 1s window
-        dmove = sf_lfp  # 1s step
-        n_segments = (ns - dwindow) // dmove + 1
-        
-        x = np.array([cropped_data[i * dmove: i * dmove + dwindow] for i in range(n_segments) if i * dmove + dwindow <= ns])
-        
-        detected_peaks = []  # Store peak indices in the original timescale
-        
-        # Loop through each segment and find peaks
-        for i in range(n_segments):
-            segment = x[i]
-            peaks, _ = scipy.signal.find_peaks(segment, height=np.percentile(segment, 90), distance=sf_lfp//2)  # Adjust threshold & min distance
-            real_peaks = peaks + (i * dmove)  # Convert to original timescale
-            detected_peaks.extend(real_peaks)
-
-        detected_peaks = np.array(detected_peaks)
-        
-        # Define epoch window (-0.2s to +0.2s): only keep QRS complex (based on Stam et al., 2023)
-        pre_samples = int(0.2 * sf_lfp)
-        post_samples = int(0.2 * sf_lfp)
-        epoch_length = pre_samples + post_samples  # Total length of each epoch
-
-        epochs = []  # Store extracted heartbeats
-
-        for peak in detected_peaks:
-            start = peak - pre_samples
-            end = peak + post_samples
-            
-            if start >= 0 and end < ns:  # Ensure we don't go out of bounds
-                epochs.append(cropped_data[start:end])
-
-        epochs = np.array(epochs)
-
-        # Compute average heartbeat template
-        mean_epoch = np.mean(epochs, axis=0)
-        ecg['proc']['template1'] = mean_epoch  # First ECG template
-
-        # Plot the detected ECG epochs
-        time = np.linspace(-0.2, 0.2, epoch_length)  # Time in seconds
-
-        self.canvas_ecg_artifact.setEnabled(True)
-        self.ax_ecg_artifact.clear()
-        self.ax_ecg_artifact.set_title("Detected QRS epochs")
-
-        for epoch in epochs:
-            if REVERSED:
-                self.ax_ecg_artifact.plot(time, - epoch, color='gray', alpha=0.1)
-            else: 
-                self.ax_ecg_artifact.plot(time, epoch, color='gray', alpha=0.1)
-        
-        if REVERSED:
-            self.ax_ecg_artifact.plot(time, - mean_epoch, color='black', linewidth=2, label='Average QRS Template')
-        else:
-            self.ax_ecg_artifact.plot(time, mean_epoch, color='black', linewidth=2, label='Average QRS Template')
-        self.ax_ecg_artifact.set_xlabel("Time (s)")
-        self.ax_ecg_artifact.set_ylabel("Amplitude")
-        self.ax_ecg_artifact.legend()
-        self.canvas_ecg_artifact.draw()
-        self.toolbar_ecg_artifact.setEnabled(True)
-
-        # Temporal correlation for ECG detection
-        r = np.correlate(cropped_data, ecg['proc']['template1'], mode='same')
-        threshold = np.percentile(r, 95)
-        detected_peaks, _ = scipy.signal.find_peaks(r, height=threshold)
-
-        ecg['proc']['r'] = r
-        ecg['proc']['thresh'] = threshold
-
-        # Second pass for refining detection
-        refined_template = np.mean([cropped_data[p - pre_samples : p + post_samples] for p in detected_peaks if p - pre_samples > 0 and p + post_samples < ns], axis=0)
-        ecg['proc']['template2'] = refined_template
-        r2 = np.correlate(cropped_data, refined_template, mode='same')
-        threshold2 = np.percentile(r2, self.dataset_intra.ecg_thresh)
-        final_peaks, _ = scipy.signal.find_peaks(r2, height=threshold2, distance=sf_lfp//2)
-
-        ecg['proc']['r2'] = r2
-        ecg['proc']['thresh2'] = threshold2
-
-        # create a short QRS template to be substracted from the signal:
-        # Assuming the R-peak is at the center of the mean_epoch
-        center_idx = len(mean_epoch) // 2  
-
-        # Detect Q-peak (local minimum before R)
-        Q_range = mean_epoch[:center_idx]  # Left side of the R-peak
-        Q_idx = np.argmin(Q_range)  # Q-peak index (minimum value before R)
-
-        # Detect S-peak (local minimum after R)
-        S_range = mean_epoch[center_idx:]  # Right side of the R-peak
-        S_idx = np.argmin(S_range) + center_idx  # Adjust index relative to full epoch
-
-        max_offset = 30  # Maximum samples to check for minimal difference
-
-        Q_window = mean_epoch[Q_idx - max_offset : Q_idx]
-        S_window = mean_epoch[S_idx : S_idx + max_offset]
-        # Find pair (q, s) with smallest absolute difference
-        min_diff = float("inf")
-        start_idx, end_idx = None, None
-
-        for i, q_val in enumerate(Q_window):
-            for j, s_val in enumerate(S_window):
-                diff = abs(q_val - s_val)
-                if diff < min_diff:
-                    min_diff = diff
-                    start_idx = i
-                    end_idx = j
-
-
-        start_idx += Q_idx - max_offset  # Adjust to full epoch index
-        end_idx += S_idx  # Adjust to full epoch index
-
-        if mean_epoch[start_idx] != mean_epoch[end_idx]:
-            higher_value = max(mean_epoch[start_idx], mean_epoch[end_idx])
-            mean_epoch[start_idx] = mean_epoch[end_idx] = higher_value
-
-        complex_qrs_template = mean_epoch[start_idx:end_idx]  # Extract the QRS complex template
-        ecg['proc']['complex_qrs_template'] = complex_qrs_template
-
-        # Define original epoch length
-        original_length = len(mean_epoch)
-
-        # Compute missing samples on both sides
-        missing_left = start_idx  # Samples removed before start_idx
-        missing_right = original_length - end_idx  # Samples removed after end_idx
-
-        # Get common value to extend (the value at start_idx and end_idx are equal)
-        common_value = mean_epoch[start_idx]
-
-        # Extend the refined template with straight tails
-        extended_template = np.concatenate([
-            np.full(missing_left, common_value),  # Left tail
-            mean_epoch[start_idx:end_idx],                     # Main refined template
-            np.full(missing_right, common_value)   # Right tail
-        ])
-
-        #print(len(extended_template))
-        #print(len(refined_template))
-
-        # Ensure the length is correct
-        assert len(extended_template) == original_length, "Length mismatch!"
-
-        # overlap the average QRS template with equal tails onto the original QRS average:
-        if REVERSED:
-            self.ax_ecg_artifact.plot(time, - extended_template, color='purple', linewidth=2, label='Average with equal tails')
-        else : 
-            self.ax_ecg_artifact.plot(time, extended_template, color='purple', linewidth=2, label='Average with equal tails')
-        self.ax_ecg_artifact.legend()
-        self.canvas_ecg_artifact.draw()
-
-        # Estimate HR
-        peak_intervals = np.diff(final_peaks) / sf_lfp  # Convert to seconds
-        hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
-        ecg['stats']['hr'] = hr
-        ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
-        self.label_heart_rate_lfp.setText(f'Heart rate: {hr} bpm')
-
-        # Check ECG detection validity
-        if 55 <= hr <= 120 and len(final_peaks) > 10:
-            ecg['detected'] = True
-        
-        ### HERE ADD A PART TO DISPLAY THE COMPUTED HEART RATE !! ###
-
-        # Copy signal for cleaned output
-        clean_data = np.copy(cropped_data)
-        template = complex_qrs_template
-        template_len = len(template)
-
-        # 1. Find R-peak index in template (highest value for peaks going up, lower value for peaks going down)
-        template_r_idx = np.argmax(template)
-
-        # 2. Prepare design matrix for linear fit (scale + offset)
-        X_template = np.vstack([template, np.ones_like(template)]).T  # Shape: (template_len, 2)
-
-        for peak_idx in final_peaks:
-            # 3. Align R-peak in signal with R-peak in template
-            start = peak_idx - template_r_idx
-            end = start + template_len
-
-            # 4. Check signal boundaries
-            if start < 0 or end > len(cropped_data):
-                continue
-
-            # 5. Extract corresponding signal segment
-            segment = cropped_data[start:end]
-            #plt.plot(segment, label='Segment', color='gray', alpha=0.5)
-            #plt.plot(template, label='Template', color='blue', alpha=0.5)
-
-            # 6. Solve for optimal scale (a) and offset (b) using least squares
-            coeffs, _, _, _ = np.linalg.lstsq(X_template, segment, rcond=None)
-            a, b = coeffs
-
-            # 7. Build fitted template and subtract
-            fitted_template = a * template + b
-            #plt.plot(fitted_template, label='Fitted Template', color='red', alpha=0.5)
-            clean_data[start:end] -= fitted_template
-
-        # Restrore the full signal:
-        if REVERSED:
-            full_data = - full_data
-            clean_data = - clean_data
-
-        clean_data_full = np.concatenate([beginning_part, clean_data, end_part])
-        ecg['cleandata'] = clean_data_full
-
-        if self.dataset_intra.selected_channel_index_ecg == 0:
-            self.dataset_intra.cleaned_ecg_left = clean_data_full
-            self.dataset_intra.detected_peaks_left = final_peaks
-            self.dataset_intra.mean_epoch_left = mean_epoch
-            self.dataset_intra.epochs_left = epochs
-            print("Left channel cleaned")
-
-        elif self.dataset_intra.selected_channel_index_ecg == 1:
-            self.dataset_intra.cleaned_ecg_right = clean_data_full
-            self.dataset_intra.detected_peaks_right = final_peaks
-            self.dataset_intra.mean_epoch_right = mean_epoch
-            self.dataset_intra.epochs_right = epochs
-            print("Right channel cleaned")
-
-        # plot the detected peaks
-        self.canvas_detected_peaks.setEnabled(True)
-        self.toolbar_detected_peaks.setEnabled(True)
-        self.ax_detected_peaks.clear()
-        self.ax_detected_peaks.set_title('Detected Peaks')
-        if REVERSED:
-            self.ax_detected_peaks.plot(- cropped_data, label='Raw ECG')
-            self.ax_detected_peaks.plot(final_peaks, - cropped_data[final_peaks], 'ro', label='Detected Peaks')
-        else:
-            self.ax_detected_peaks.plot(cropped_data, label='Raw ECG')
-            self.ax_detected_peaks.plot(final_peaks, cropped_data[final_peaks], 'ro', label='Detected Peaks')
-        self.canvas_detected_peaks.draw()
-    
-        #plot an overlap of the raw and cleaned data
-        self.canvas_ecg_clean.setEnabled(True)
-        self.toolbar_ecg_clean.setEnabled(True)
-        self.ax_ecg_clean.clear()
-        self.ax_ecg_clean.set_title("Cleaned ECG Signal")
-        self.ax_ecg_clean.plot(times,full_data, label='Raw data')
-        self.ax_ecg_clean.plot(times,clean_data_full, label='Cleaned data')
-        self.ax_ecg_clean.set_xlabel("Time (s)")
-        self.ax_ecg_clean.set_ylabel("Amplitude")
-        self.ax_ecg_clean.legend()
-        self.canvas_ecg_clean.draw()
-
-        self.btn_confirm_cleaning.setEnabled(True)  # Enable the button after cleaning         
-            
-
-    def start_ecg_cleaning_template_sub_with_ext(self):
-        """Start the ECG cleaning process using the template substraction method."""
-        if self.dataset_intra.synced_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
-            # Perform the ECG cleaning process here
-            try:
-                self.clean_ecg_template_sub_with_ext()
-
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
-
-    def clean_ecg_template_sub_with_ext(self):
-        #### FIRST STEP: PREDETERMINE R-PEAKS TIMESTAMPS USING ECG CHANNEL ####
-        """ The externally recorded ECG signal was used to predetermine
-        the timestamps of the R-peaks. The ECG signal was z-scored ((x-l)/r) 
-        over the entire recording and the function findpeaks was used to search 
-        for R-peaks with a specific height (at least two and-a-half times 
-        the standard deviation of the entire time series) and at a 
-        specific inter-peak distance (minimally 500 ms). 
-        The algorithm accounts for a negative QRS complex
-        by repeating this procedure after multiplying the signal with
-        1. For both orientations of the LFP signal, the values of the
-        peaks were averaged and the peaks with the highest mean
-        determined the orientation of the QRS complexes, provided
-        that at least the same amount of peaks were detected.
-        """
-        data_extra = self.dataset_extra.synced_data.get_data()[self.dataset_extra.selected_channel_index_ecg]
-        #data_extra_scaled = data_extra * y_max_factor
-        data_extra_scaled = data_extra
-
-
-        # Apply 0.1 Hz-100Hz band-pass filter to ECG data
-        b, a = scipy.signal.butter(1, 0.05, "highpass")
-        detrended_data = scipy.signal.filtfilt(b, a, data_extra_scaled)
-        low_cutoff = 100.0  # Hz
-        b2, a2 = scipy.signal.butter(
-            N=4,  # Filter order
-            Wn=low_cutoff,
-            btype="lowpass",
-            fs=self.dataset_extra.sf 
-        )
-        ecg_data = scipy.signal.filtfilt(b2, a2, detrended_data)
-        timescale_extra = np.linspace(0, self.dataset_extra.synced_data.get_data().shape[1]/self.dataset_extra.sf, self.dataset_extra.synced_data.get_data().shape[1])
-
-        # 1. Z-score the ECG signal
-        ecg_z = (ecg_data - np.mean(ecg_data)) / np.std(ecg_data)
-
-        # 2. Define peak detection params
-        threshold = 2.5  # 2.5 * std (signal is already z-scored)
-        min_distance_samples = int(0.5 * self.dataset_extra.sf)  # 500 ms in samples
-
-        # 3. Detect peaks in original signal
-        peaks_pos, props_pos = scipy.signal.find_peaks(
-            ecg_z,
-            height=threshold,
-            distance=min_distance_samples
-        )
-
-        # 4. Detect peaks in inverted signal
-        peaks_neg, props_neg = scipy.signal.find_peaks(
-            -ecg_z,
-            height=threshold,
-            distance=min_distance_samples
-        )
-
-        # 5. Compare polarity by mean peak amplitude
-        mean_pos = np.mean(props_pos['peak_heights']) if len(peaks_pos) > 0 else 0
-        mean_neg = np.mean(props_neg['peak_heights']) if len(peaks_neg) > 0 else 0
-
-        # 6. Select better polarity (also check similar number of peaks)
-        #if len(peaks_pos) >= len(peaks_neg):
-        if mean_pos >= mean_neg:
-            chosen_peaks = peaks_pos
-            orientation = 'positive'
-        else:
-            chosen_peaks = peaks_neg
-            orientation = 'negative'        
-        print(f"peaks orientation in the ecg channel: {orientation}")
-        #### Plot the detected peaks ####
-        self.canvas_detected_peaks_with_ext.setEnabled(True)
-        self.toolbar_detected_peaks_with_ext.setEnabled(True)
-        self.ax_detected_peaks_with_ext.clear()
-        self.ax_detected_peaks_with_ext.set_title('Detected Peaks')
-        self.ax_detected_peaks_with_ext.plot(timescale_extra, ecg_data, label='Raw ECG', alpha=0.1)
-        self.ax_detected_peaks_with_ext.plot(timescale_extra[chosen_peaks], ecg_data[chosen_peaks], 'ro', label='Detected Peaks', alpha=0.1)
-        self.canvas_detected_peaks_with_ext.draw()
-
-
-        #### SECOND STEP: FIND CORRESPONDING R-PEAKS IN THE LFP SIGNAL ####
-        """ Subsequently, the LFP signal was searched for peaks using
-        numpy functions min and max in a window of 20 samples
-        prior and after the R-peaks found in the ECG signal. This
-        window was adopted in order to account for inaccuracies
-        in the synchronization of the LFP- and ECG signals. The absolute 
-        values of the peaks found with min and max were averaged and the peaks
-        with the highest absolute mean determined the orientation of the QRS 
-        complexes.
-        """
-
-        full_data = self.dataset_intra.synced_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
-        times = np.linspace(0, self.dataset_intra.synced_data.get_data().shape[1]/self.dataset_intra.sf, self.dataset_intra.synced_data.get_data().shape[1])
-        
-        """
-        For each ECG R-peak, search for LFP peaks (min and max) in ±20 LFP samples.
-        """
-        # Convert R-peaks from ECG samples to seconds
-        r_peak_times_sec = chosen_peaks / self.dataset_extra.sf
-
-        # Convert times to LFP sample indices
-        r_peaks_lfp_idx = np.round(r_peak_times_sec * self.dataset_intra.sf).astype(int)
-        print(len(r_peaks_lfp_idx)) # sub017 DBS ON Left = 1685
-
-        window = 20  # ±20 LFP samples
-        max_peaks = []
-        min_peaks = []
-
-        for idx in r_peaks_lfp_idx:
-            start = max(idx - window, 0)
-            end = min(idx + window + 1, len(full_data) -1 )
-            segment = full_data[start:end]
-
-            #if len(segment) > 0:  # will need to be refined for robustness to NaN values
-            if segment.size:
-                max_peaks.append(np.nanmax(segment))
-                min_peaks.append(np.nanmin(segment))
-
-        # Calculate mean absolute values
-        mean_abs_max = np.nanmean(np.abs(max_peaks)) if max_peaks else 0
-        print(mean_abs_max)
-        mean_abs_min = np.nanmean(np.abs(min_peaks)) if min_peaks else 0
-        print(mean_abs_min)
-
-        # Choose the orientation with the higher mean absolute amplitude
-        lfp_peak_indices = []
-        polarity = None
-        if mean_abs_max >= mean_abs_min:
-            polarity = 'positive'
-            print(f"peaks polarity in the LFP channel: {polarity}")
-            for idx in r_peaks_lfp_idx:
-                start = max(idx - window, 0)
-                end = min(idx + window + 1, len(full_data)-1)
-                segment = full_data[start:end]
-                #if len(segment) > 0:
-                if segment.size:
-                    local_max_idx = np.nanargmax(segment) 
-                    peak_global_idx = start + local_max_idx
-                    lfp_peak_indices.append(peak_global_idx)
-        else:
-            polarity = 'negative'
-            print(f"peaks polarity in the LFP channel: {polarity}")
-            for idx in r_peaks_lfp_idx:
-                start = max(idx - window, 0)
-                end = min(idx + window + 1, len(full_data)-1)
-                segment = full_data[start:end]
-                #if len(segment) > 0:
-                if segment.size:
-                    local_min_idx = np.nanargmin(segment) 
-                    peak_global_idx = start + local_min_idx
-                    lfp_peak_indices.append(peak_global_idx)
-
-        #### Plot the detected peaks ####
-        #self.canvas_detected_peaks_with_ext.setEnabled(True)
-        #self.toolbar_detected_peaks_with_ext.setEnabled(True)
-        #self.ax_detected_peaks_with_ext.clear()
-        #self.ax_detected_peaks_with_ext.set_title('Detected Peaks')
-        self.ax_detected_peaks_with_ext.plot(times, full_data, label='Raw LFP', color='black')
-        self.ax_detected_peaks_with_ext.plot(np.array(times)[lfp_peak_indices], np.array(full_data)[lfp_peak_indices], 'ro', label='LFP Peaks')
-        self.ax_detected_peaks_with_ext.legend()
-        self.canvas_detected_peaks_with_ext.draw()        
-
-
-        # Create a QRS template #
-        # Define epoch window (-0.2s to +0.2s): only keep QRS complex (based on Stam et al., 2023)
-        pre_samples = int(0.2 * self.dataset_intra.sf)
-        post_samples = int(0.2 * self.dataset_intra.sf)
-        epoch_length = pre_samples + post_samples  # Total length of each epoch
-
-        epochs = []  # Store extracted heartbeats
-
-        # avoid beginning and end of the recording to compute the average QRS template (because of the sync pulses):
-        # remove first and last minute just to be sure:
-        after_pulse = 60 * self.dataset_intra.sf
-        before_last_pulse = (times[-1] - 60) * self.dataset_intra.sf
-
-        for peak in lfp_peak_indices:
-            start = peak - pre_samples
-            end = peak + post_samples
-            
-            #if start >= 0 and end < len(full_data):  # Ensure we don't go out of bounds
-            if start >= after_pulse and end < before_last_pulse:
-                epochs.append(full_data[start:end])
-
-        epochs = np.array(epochs)
-
-        # Compute average QRS template
-        mean_epoch = np.nanmean(epochs, axis=0)
-        #ecg['proc']['template1'] = mean_epoch  # First ECG template
-
-        # Plot the detected ECG epochs
-        time = np.linspace(-0.2, 0.2, epoch_length)  # Time in seconds
-
-        self.canvas_ecg_artifact_with_ext.setEnabled(True)
-        self.toolbar_ecg_artifact_with_ext.setEnabled(True)
-        self.ax_ecg_artifact_with_ext.clear()
-        self.ax_ecg_artifact_with_ext.set_title("Detected QRS epochs")
-
-        for epoch in epochs:
-            self.ax_ecg_artifact_with_ext.plot(time, epoch, color='gray', alpha=0.3)
-        
-        self.ax_ecg_artifact_with_ext.plot(time, mean_epoch, color='black', linewidth=2, label='Average QRS Template')
-        self.ax_ecg_artifact_with_ext.set_xlabel("Time (s)")
-        self.ax_ecg_artifact_with_ext.set_ylabel("Amplitude")
-        self.ax_ecg_artifact_with_ext.legend()
-        self.canvas_ecg_artifact_with_ext.draw()
-        ####################################################################
-        # create a short QRS template to be substracted from the signal:
-        # Assuming the R-peak is at the center of the mean_epoch
-        center_idx = len(mean_epoch) // 2  
-        # Detect Q-peak (local minimum before R)
-        Q_range = mean_epoch[center_idx-25:center_idx]  # Left side of the R-peak (100ms before)
-        if polarity == 'negative': 
-            reversed_idx = np.nanargmax(Q_range[::-1])
-            Q_idx = center_idx - 1 - reversed_idx
-        elif polarity == 'positive':
-            reversed_idx = np.nanargmin(Q_range[::-1])   # Q-peak index (minimum value before R)
-            Q_idx = center_idx - 1 - reversed_idx  
-
-        # Detect S-peak (local minimum after R)
-        S_range = mean_epoch[center_idx: center_idx+25]  # Right side of the R-peak (100ms after)
-        if polarity == 'negative':
-            S_idx = np.nanargmax(S_range) + center_idx
-        elif polarity == 'positive':
-            S_idx = np.nanargmin(S_range) + center_idx  # Adjust index relative to full epoch
-        
-        max_offset = 30  # Maximum samples to check for minimal difference
-
-        # Define the left tail: from beginning of epoch up# to Q-peak (max 30 samples)
-        left_tail_end = min(Q_idx, max_offset)
-        Q_window = mean_epoch[:left_tail_end]
-        #left_tail_start = max(0, Q_idx - max_offset)
-        #Q_window = mean_epoch[left_tail_start:Q_idx]
-
-        # Define the right tail: from S-peak to end of epoch (max 30 samples)
-        right_tail_start = max(S_idx + 1, len(mean_epoch) - max_offset)
-        S_window = mean_epoch[right_tail_start:]
-        #right_tail_end = min(S_idx + 30, len(mean_epoch)-1)
-        #S_window = mean_epoch[S_idx:right_tail_end]
-
-        # Search for the pair (i, j) with the smallest absolute difference
-        #best_i, best_j = 0, len(mean_epoch) - 1
-
-        #Q_window = mean_epoch[Q_idx - max_offset : Q_idx]
-        #S_window = mean_epoch[S_idx : S_idx + max_offset]
-        #Q_window = mean_epoch[0: max_offset]
-        #S_window = mean_epoch[len(mean_epoch) - max_offset : len(mean_epoch)-1]
-        # Find pair (q, s) with smallest absolute difference
-        min_diff = float("inf")
-        start_idx, end_idx = None, None
-
-        for i, q_val in enumerate(Q_window):
-            for j, s_val in enumerate(S_window):
-                diff = abs(q_val - s_val)
-                if diff < min_diff:
-                    min_diff = diff
-                    start_idx = i
-                    end_idx = j + right_tail_start  # Adjust index relative to full epoch
-                    #end_idx = j + S_idx
-
-        #start_idx += Q_idx - max_offset  # Adjust to full epoch index
-        #end_idx += S_idx  # Adjust to full epoch index
-        #end_idx += (len(mean_epoch) - max_offset)
-
-        if mean_epoch[start_idx] != mean_epoch[end_idx]:
-            higher_value = max(mean_epoch[start_idx], mean_epoch[end_idx])
-            mean_epoch[start_idx] = mean_epoch[end_idx] = higher_value
-
-        complex_qrs_template = mean_epoch[start_idx:end_idx]  # Extract the QRS complex template
-
-        #ecg['proc']['complex_qrs_template'] = complex_qrs_template
-
-        # Define original epoch length
-        original_length = len(mean_epoch)
-
-        # Compute missing samples on both sides
-        missing_left = start_idx  # Samples removed before start_idx
-        missing_right = original_length - end_idx  # Samples removed after end_idx
-
-        # Get common value to extend (the value at start_idx and end_idx are equal)
-        common_value = mean_epoch[start_idx]
-
-        # Extend the refined template with straight tails
-        extended_template = np.concatenate([
-            np.full(missing_left, common_value),  # Left tail
-            mean_epoch[start_idx:end_idx],                     # Main refined template
-            np.full(missing_right, common_value)   # Right tail
-        ])
-
-
-        # Ensure the length is correct
-        assert len(extended_template) == original_length, "Length mismatch!"
-
-        # overlap the average QRS template with equal tails onto the original QRS average:
-        self.ax_ecg_artifact_with_ext.plot(time, extended_template, color='purple', linewidth=2, label='Average with equal tails')
-        self.ax_ecg_artifact_with_ext.legend()
-        self.canvas_ecg_artifact_with_ext.draw()
-
-        # Estimate HR
-        peak_intervals = np.diff(lfp_peak_indices) / self.dataset_intra.sf  # Convert to seconds
-        hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
-        #ecg['stats']['hr'] = hr
-        #ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
-        self.label_heart_rate_lfp_with_ext.setText(f'Heart rate: {hr} bpm')
-
-        # Copy signal for cleaned output
-        clean_data = np.copy(full_data)
-        template = complex_qrs_template
-        template_len = len(template)
-        #print(template_len)
-
-        # 1. Find R-peak index in template (highest value for peaks going up, lower value for peaks going down)
-        if polarity == 'positive':
-            template_r_idx = np.argmax(template)
-        elif polarity == 'negative':
-            template_r_idx = np.argmin(template)
-
-        # 2. Prepare design matrix for linear fit (scale + offset)
-        X_template = np.vstack([template, np.ones_like(template)]).T  # Shape: (template_len, 2)
-    
-        for peak_idx in lfp_peak_indices:
-            # 3. Align R-peak in signal with R-peak in template
-            start = peak_idx - template_r_idx
-            end = start + template_len
-
-            # 4. Check signal boundaries
-            if start < 0 or end > len(full_data):
-                continue
-
-            # 5. Extract corresponding signal segment
-            segment = full_data[start:end]
-
-            # 6. Solve for optimal scale (a) and offset (b) using least squares
-            coeffs, _, _, _ = np.linalg.lstsq(X_template, segment, rcond=None)
-            a, b = coeffs
-
-            # 7. Build fitted template and subtract
-            fitted_template = a * template + b
-            
-            clean_data[start:end] -= fitted_template
-
-
-        if self.dataset_intra.selected_channel_index_ecg == 0:
-            self.dataset_intra.cleaned_ecg_left = clean_data
-            self.dataset_intra.detected_peaks_left = lfp_peak_indices
-            self.dataset_intra.mean_epoch_left = mean_epoch
-            self.dataset_intra.epochs_left = epochs
-            print("Left channel cleaned")
-
-        elif self.dataset_intra.selected_channel_index_ecg == 1:
-            self.dataset_intra.cleaned_ecg_right = clean_data
-            self.dataset_intra.detected_peaks_right = lfp_peak_indices
-            self.dataset_intra.mean_epoch_right = mean_epoch
-            self.dataset_intra.epochs_right = epochs
-            print("Right channel cleaned")
-
-        
-        # plot an overlap of the raw and cleaned data
-        self.canvas_ecg_clean_with_ext.setEnabled(True)
-        self.toolbar_ecg_clean_with_ext.setEnabled(True)
-        self.ax_ecg_clean_with_ext.clear()
-        self.ax_ecg_clean_with_ext.set_title("Cleaned ECG Signal")
-        self.ax_ecg_clean_with_ext.plot(times,full_data, label='Raw data')
-        self.ax_ecg_clean_with_ext.plot(times,clean_data, label='Cleaned data')
-        self.ax_ecg_clean_with_ext.set_xlabel("Time (s)")
-        self.ax_ecg_clean_with_ext.set_ylabel("Amplitude")
-        self.ax_ecg_clean_with_ext.legend()
-        self.canvas_ecg_clean_with_ext.draw()
-        
-
-        self.btn_confirm_cleaning_with_ext.setEnabled(True)  # Enable the button after cleaning            
-
-
-        #######################################################################
-        #########          SINGULAR VALUE DECOMPOSITION METHOD        #########
-        #######################################################################      
-
-    def start_ecg_cleaning_svd_with_ext(self):
-        """Start the ECG cleaning process using Singular Value Decomposition method."""
-        if self.dataset_intra.raw_data is not None and self.dataset_intra.selected_channel_index_ecg is not None:
-            # Perform the ECG cleaning process here
-            try:
-                self.clean_ecg_svd_with_ext()
-
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to clean ECG: {e}")
-    
-
-    def clean_ecg_svd_with_ext(self):
-        data_extra = self.dataset_extra.synced_data.get_data()[self.dataset_extra.selected_channel_index_ecg]
-        #data_extra_scaled = data_extra * y_max_factor
-        data_extra_scaled = data_extra
-
-        # Apply 0.1 Hz-100Hz band-pass filter to ECG data
-        b, a = scipy.signal.butter(1, 0.05, "highpass")
-        detrended_data = scipy.signal.filtfilt(b, a, data_extra_scaled)
-        low_cutoff = 100.0  # Hz
-        b2, a2 = scipy.signal.butter(
-            N=4,  # Filter order
-            Wn=low_cutoff,
-            btype="lowpass",
-            fs=self.dataset_extra.sf 
-        )
-        ecg_data = scipy.signal.filtfilt(b2, a2, detrended_data)
-        timescale_extra = np.linspace(0, self.dataset_extra.synced_data.get_data().shape[1]/self.dataset_extra.sf, self.dataset_extra.synced_data.get_data().shape[1])
-
-        # 1. Z-score the ECG signal
-        ecg_z = (ecg_data - np.mean(ecg_data)) / np.std(ecg_data)
-
-        # 2. Define peak detection params
-        threshold = 2.5  # 2.5 * std (signal is already z-scored)
-        min_distance_samples = int(0.5 * self.dataset_extra.sf)  # 500 ms in samples
-
-        # 3. Detect peaks in original signal
-        peaks_pos, props_pos = scipy.signal.find_peaks(
-            ecg_z,
-            height=threshold,
-            distance=min_distance_samples
-        )
-
-        # 4. Detect peaks in inverted signal
-        peaks_neg, props_neg = scipy.signal.find_peaks(
-            -ecg_z,
-            height=threshold,
-            distance=min_distance_samples
-        )
-
-        # 5. Compare polarity by mean peak amplitude
-        mean_pos = np.mean(props_pos['peak_heights']) if len(peaks_pos) > 0 else 0
-        mean_neg = np.mean(props_neg['peak_heights']) if len(peaks_neg) > 0 else 0
-
-        # 6. Select better polarity (also check similar number of peaks)
-        #if len(peaks_pos) >= len(peaks_neg):
-        if mean_pos >= mean_neg:
-            chosen_peaks = peaks_pos
-            orientation = 'positive'
-        else:
-            chosen_peaks = peaks_neg
-            orientation = 'negative'        
-        print(f"peaks orientation in the ecg channel: {orientation}")
-        #### Plot the detected peaks ####
-        self.canvas_detected_peaks_with_ext.setEnabled(True)
-        self.toolbar_detected_peaks_with_ext.setEnabled(True)
-        self.ax_detected_peaks_with_ext.clear()
-        self.ax_detected_peaks_with_ext.set_title('Detected Peaks')
-        self.ax_detected_peaks_with_ext.plot(timescale_extra, ecg_data, label='Raw ECG', alpha=0.1)
-        self.ax_detected_peaks_with_ext.plot(timescale_extra[chosen_peaks], ecg_data[chosen_peaks], 'ro', label='Detected Peaks', alpha=0.1)
-        self.canvas_detected_peaks_with_ext.draw()
-
-        #### SECOND STEP: FIND CORRESPONDING R-PEAKS IN THE LFP SIGNAL ####
-        """ Subsequently, the LFP signal was searched for peaks using
-        numpy functions min and max in a window of 20 samples
-        prior and after the R-peaks found in the ECG signal. This
-        window was adopted in order to account for inaccuracies
-        in the synchronization of the LFP- and ECG signals. The absolute 
-        values of the peaks found with min and max were averaged and the peaks
-        with the highest absolute mean determined the orientation of the QRS 
-        complexes.
-        """
-
-        full_data = self.dataset_intra.synced_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
-        times = np.linspace(0, self.dataset_intra.synced_data.get_data().shape[1]/self.dataset_intra.sf, self.dataset_intra.synced_data.get_data().shape[1])
-        
-        """
-        For each ECG R-peak, search for LFP peaks (min and max) in ±20 LFP samples.
-        """
-        # Convert R-peaks from ECG samples to seconds
-        r_peak_times_sec = chosen_peaks / self.dataset_extra.sf
-
-        # Convert times to LFP sample indices
-        r_peaks_lfp_idx = np.round(r_peak_times_sec * self.dataset_intra.sf).astype(int)
-        print(len(r_peaks_lfp_idx)) # sub017 DBS ON Left = 1685
-
-        window = 20  # ±20 LFP samples
-        max_peaks = []
-        min_peaks = []
-
-        for idx in r_peaks_lfp_idx:
-            start = max(idx - window, 0)
-            end = min(idx + window + 1, len(full_data) -1 )
-            segment = full_data[start:end]
-
-            #if len(segment) > 0:  # will need to be refined for robustness to NaN values
-            if segment.size:
-                max_peaks.append(np.nanmax(segment))
-                min_peaks.append(np.nanmin(segment))
-
-        # Calculate mean absolute values
-        mean_abs_max = np.nanmean(np.abs(max_peaks)) if max_peaks else 0
-        print(mean_abs_max)
-        mean_abs_min = np.nanmean(np.abs(min_peaks)) if min_peaks else 0
-        print(mean_abs_min)
-
-        # Choose the orientation with the higher mean absolute amplitude
-        lfp_peak_indices = []
-        polarity = None
-        if mean_abs_max >= mean_abs_min:
-            polarity = 'positive'
-            print(f"peaks polarity in the LFP channel: {polarity}")
-            for idx in r_peaks_lfp_idx:
-                start = max(idx - window, 0)
-                end = min(idx + window + 1, len(full_data)-1)
-                segment = full_data[start:end]
-                #if len(segment) > 0:
-                if segment.size:
-                    local_max_idx = np.nanargmax(segment) 
-                    peak_global_idx = start + local_max_idx
-                    lfp_peak_indices.append(peak_global_idx)
-        else:
-            polarity = 'negative'
-            print(f"peaks polarity in the LFP channel: {polarity}")
-            for idx in r_peaks_lfp_idx:
-                start = max(idx - window, 0)
-                end = min(idx + window + 1, len(full_data)-1)
-                segment = full_data[start:end]
-                #if len(segment) > 0:
-                if segment.size:
-                    local_min_idx = np.nanargmin(segment) 
-                    peak_global_idx = start + local_min_idx
-                    lfp_peak_indices.append(peak_global_idx)
-
-        self.ax_detected_peaks_with_ext.plot(times, full_data, label='Raw LFP', color='black')
-        self.ax_detected_peaks_with_ext.plot(np.array(times)[lfp_peak_indices], np.array(full_data)[lfp_peak_indices], 'ro', label='LFP Peaks')
-        self.ax_detected_peaks_with_ext.legend()
-        self.canvas_detected_peaks_with_ext.draw()        
-
-        # Estimate HR
-        peak_intervals = np.diff(lfp_peak_indices) / self.dataset_intra.sf  # Convert to seconds
-        hr = 60 / np.mean(peak_intervals) if len(peak_intervals) > 0 else 0
-        #ecg['stats']['hr'] = hr
-        #ecg['stats']['pctartefact'] = (1 - len(final_peaks) / ns) * 100
-        self.label_heart_rate_lfp_with_ext.setText(f'Heart rate: {hr} bpm')
-
-        # Create a QRS template #
-        # Define epoch window (-0.2s to +0.2s): only keep QRS complex (based on Stam et al., 2023)
-        pre_samples = int(0.2 * self.dataset_intra.sf)
-        post_samples = int(0.2 * self.dataset_intra.sf)
-        epoch_length = pre_samples + post_samples  # Total length of each epoch
-
-        epochs = []  # Store extracted heartbeats
-
-        # avoid beginning and end of the recording to compute the average QRS template (because of the sync pulses):
-        # remove first and last minute just to be sure:
-        after_pulse = 60 * self.dataset_intra.sf
-        before_last_pulse = (times[-1] - 60) * self.dataset_intra.sf
-
-        lfp_peak_indices_filtered = []
-
-        for peak in lfp_peak_indices:
-            start = peak - pre_samples
-            end = peak + post_samples
-            
-            #if start >= 0 and end < len(full_data):  # Ensure we don't go out of bounds
-            if start >= after_pulse and end < before_last_pulse:
-                epochs.append(full_data[start:end])
-                lfp_peak_indices_filtered.append(peak)
-
-        epochs = np.array(epochs)    # shape: (n timepoints, n epochs)
-
-        ######### SINGULAR VALUE DECOMPOSITION ################
-        X = epochs.T                        # shape: (n epochs, n timepoints)
-        U, S, Vh = np.linalg.svd(X, full_matrices=False)
-
-        # only use SVD1 (therefore index 0): CAN BE MODIFIED LATER
-        reconstructed = np.outer(U[:, 0], S[0] * Vh[0, :]).T   # shape (n epochs, n timepoints)
-
-        # using different SVD: example with SVD2:
-        #SVD_components = {}
-        #SVD_level = 2
-        #comps = [1,2,3,4]
-        #for i in range(len(comps)):
-        #    SVD = U[:, :comps[i]] @ np.diag(S[:comps[i]]) @ Vh[:comps[i], :]
-        #    SVD_components[i] = SVD
-
-        #reconstructed = SVD_components[1].T
-
-        all_complex_svd_templates = []
-        all_complex_offset_svd_templates = []
-
-        max_sample = 30 # tail with 30 samples max
-        self.ax_ecg_artifact_with_ext.clear()
-        for r in reconstructed:
-            left_tail = r[0:max_sample]
-            right_tail_start = (len(r)-1) - max_sample
-            right_tail = r[right_tail_start:]
-            min_diff = float("inf")
-            start_idx, end_idx = None, None
-
-            for i, q_val in enumerate(left_tail):
-                for j, s_val in enumerate(right_tail):
-                    diff = abs(q_val - s_val)
-                    if diff < min_diff:
-                        min_diff = diff
-                        start_idx = i
-                        end_idx = j + right_tail_start
-            
-            if r[start_idx] != r[end_idx]:
-                higher_value = max(r[start_idx], r[end_idx])
-                r[start_idx] = r[end_idx] = higher_value
-
-            svd_template = r[start_idx:end_idx]
-            all_complex_svd_templates.append(svd_template)
-            offset_svd_template = svd_template - r[start_idx]
-            all_complex_offset_svd_templates.append(offset_svd_template)
-            timescale_template = np.linspace(0, len(all_complex_svd_templates[0])/self.dataset_intra.sf, len(all_complex_svd_templates[0]))
-            self.ax_ecg_artifact_with_ext.plot(timescale_template, offset_svd_template, color='lightgrey')
-        
-        mean_svd_template = np.mean(np.array(all_complex_offset_svd_templates), axis=0)
-        self.ax_ecg_artifact_with_ext.plot(timescale_template, mean_svd_template, color = 'black', label = 'average SVD across epochs')
-        self.ax_ecg_artifact_with_ext.set_xlabel("Time (s)")
-        self.ax_ecg_artifact_with_ext.set_ylabel("Amplitude")
-        self.ax_ecg_artifact_with_ext.legend()
-        self.canvas_ecg_artifact_with_ext.draw()
-
-
-        clean_data = np.copy(full_data)
-
-        for i, peak_idx in enumerate(lfp_peak_indices_filtered):
-            # load the template corresponding to that specific peak:
-            template = all_complex_svd_templates[i]
-            svd_template_len = len(template)
-            
-            # 3. Align R-peak in signal with R-peak in template
-            svd_template_r_idx = np.argmax(template) if polarity == 'positive' else np.argmin(template)
-            start = peak_idx - svd_template_r_idx
-            end = start + svd_template_len
-
-            # 2. Prepare design matrix for linear fit (scale + offset)
-            X_template = np.vstack([template, np.ones_like(template)]).T  # Shape: (template_len, 2)
-
-            # 4. Check signal boundaries
-            if start < 0 or end > len(full_data):
-                continue
-
-            # 5. Extract corresponding signal segment
-            segment = full_data[start:end]
-
-            # 6. Solve for optimal scale (a) and offset (b) using least squares
-            coeffs, _, _, _ = np.linalg.lstsq(X_template, segment, rcond=None)
-            a, b = coeffs
-
-            # 7. Build fitted template and subtract
-            #fitted_template = a * template + b
-            fitted_template = template + b # ONLY CHANGES THE OFFSET, LEAVES THE SCALING INTACT !!
-            if i == 1:
-                plt.plot(segment, label = 'original segment')
-                plt.plot(fitted_template, label = 'fitted_template')
-            
-            clean_data[start:end] -= fitted_template
-
-        if self.dataset_intra.selected_channel_index_ecg == 0:
-            self.dataset_intra.cleaned_ecg_left = clean_data
-            self.dataset_intra.detected_peaks_left = lfp_peak_indices
-            #self.dataset_intra.epochs_left = epochs
-            print("Left channel cleaned")
-
-        elif self.dataset_intra.selected_channel_index_ecg == 1:
-            self.dataset_intra.cleaned_ecg_right = clean_data
-            self.dataset_intra.detected_peaks_right = lfp_peak_indices
-            #self.dataset_intra.epochs_right = epochs
-            print("Right channel cleaned")
-
-        
-        # plot an overlap of the raw and cleaned data
-        self.canvas_ecg_clean_with_ext.setEnabled(True)
-        self.toolbar_ecg_clean_with_ext.setEnabled(True)
-        self.ax_ecg_clean_with_ext.clear()
-        self.ax_ecg_clean_with_ext.set_title("Cleaned ECG Signal")
-        self.ax_ecg_clean_with_ext.plot(times,full_data, label='Raw data')
-        self.ax_ecg_clean_with_ext.plot(times,clean_data, label='Cleaned data')
-        self.ax_ecg_clean_with_ext.set_xlabel("Time (s)")
-        self.ax_ecg_clean_with_ext.set_ylabel("Amplitude")
-        self.ax_ecg_clean_with_ext.legend()
-        self.canvas_ecg_clean_with_ext.draw()
-        
-
-        self.btn_confirm_cleaning_with_ext.setEnabled(True)  # Enable the button after cleaning            
+            self.button_confirm_sync.setEnabled(False)
+            self.btn_sync_as_set.setEnabled(False)
+            #self.btn_sync_as_pickle.setEnabled(False)
+            #self.btn_all_as_pickle.setEnabled(False)
+            #self.btn_sync_as_mat.setEnabled(False)
 
 
 

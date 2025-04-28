@@ -8,20 +8,20 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.backend_bases import MouseButton
 import matplotlib.pyplot as plt
-from mne.io import read_raw_fieldtrip  # Import necessary functions
-from mnelab.io.readers import read_raw
+#from mne.io import read_raw_fieldtrip  # Import necessary functions
+#from mnelab.io.readers import read_raw
 from os.path import join, basename, dirname, exists
-from pyxdf import resolve_streams
-import scipy
-from scipy.io import savemat
-import numpy as np
+#from pyxdf import resolve_strea#ms
+#import scip#y
+#from scipy.i#o import savemat
+#import numpy #as np
 
 import webbrowser
 from functools import partial
 
 # import modules
 
-from functions.tmsi_poly5reader import Poly5Reader
+#from functions.tmsi_poly5reader import Poly5Reader
 from functions.io import (
     select_saving_folder,
     load_mat_file,
@@ -42,7 +42,10 @@ from functions.interactive import (
     select_channel_extra,
     select_ecg_channel_to_compute_hr_external,
     select_last_artifact_intra,
-    select_last_artifact_extra
+    select_last_artifact_extra,
+    choose_int_channel_for_cleaning,
+    choose_ext_channel_for_cleaning,
+    validate_filtering
     )
 from functions.plotting import (
     plot_channel_intra,
@@ -62,10 +65,11 @@ from functions.timeshift import (
     )
 from functions.ecg_cleaning import (
     start_ecg_cleaning_interpolation,
-    start_ecg_cleaning_interpolation_with_ext,
+    #start_ecg_cleaning_interpolation_with_ext,
     start_ecg_cleaning_template_sub,
-    start_ecg_cleaning_template_sub_with_ext,
-    start_ecg_cleaning_svd_with_ext
+    start_ecg_cleaning_svd
+#    start_ecg_cleaning_template_sub_with_ext,
+    
 )
 
 
@@ -119,7 +123,26 @@ class Button(QPushButton):
                 color: gray;}}
         """)
         
-
+class Toolbar(NavigationToolbar):
+    def __init__(self, canvas, parent=None):
+        super().__init__(canvas, parent)
+        
+        # Optional: make toolbar not take up too much vertical space
+        #self.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        
+        # Apply smaller styling
+        self.setStyleSheet("""
+            QToolBar {
+                spacing: 2px;
+            }
+            QToolButton {
+                width: 16px;
+                height: 16px;
+                icon-size: 12px 12px;
+                padding: 0px;
+                margin: 0px;
+            }
+        """)
 
 
 class SyncGUI(QMainWindow):
@@ -143,14 +166,11 @@ class SyncGUI(QMainWindow):
         self.home_page = self.create_home_page()
         self.timeshift_page = self.create_timeshift_page()
         self.effective_sf_page = self.create_effective_sf_page()
-        self.ecg_no_ext_page = self.create_ecg_no_ext_page()
-        self.ecg_with_ext_page = self.create_ecg_with_ext_page()
+        self.ecg_cleaning_page = self.create_ecg_cleaning_page()
         self.stacked_widget.addWidget(self.home_page)
         self.stacked_widget.addWidget(self.timeshift_page)
         self.stacked_widget.addWidget(self.effective_sf_page)
-        self.stacked_widget.addWidget(self.ecg_no_ext_page) 
-        self.stacked_widget.addWidget(self.ecg_with_ext_page)
-
+        self.stacked_widget.addWidget(self.ecg_cleaning_page)
 
 
         # Create the header with navigation buttons
@@ -162,10 +182,8 @@ class SyncGUI(QMainWindow):
         self.btn_timeshift.clicked.connect(self.show_timeshift_page)
         self.btn_effective_sf = Button("Effective Sampling Frequency correction", "#cd9ddc")
         self.btn_effective_sf.clicked.connect(partial(self.show_effective_sf_page))
-        self.btn_ecg_no_ext = Button("ECG Cleaning - no ext", "#cd9ddc")
-        self.btn_ecg_no_ext.clicked.connect(self.show_ecg_no_ext_page)
-        self.btn_ecg_with_ext = Button("ECG Cleaning - with ext", "#cd9ddc")
-        self.btn_ecg_with_ext.clicked.connect(self.show_ecg_with_ext_page)
+        self.btn_ecg_cleaning = Button("ECG Cleaning", "#cd9ddc")
+        self.btn_ecg_cleaning.clicked.connect(self.show_ecg_cleaning_page)        
         self.btn_help = Button("Help", "#cd9ddc")
         self.btn_help.clicked.connect(self.show_help)
 
@@ -174,8 +192,7 @@ class SyncGUI(QMainWindow):
         header_layout.addWidget(self.btn_home)
         header_layout.addWidget(self.btn_timeshift)
         header_layout.addWidget(self.btn_effective_sf)
-        header_layout.addWidget(self.btn_ecg_no_ext)
-        header_layout.addWidget(self.btn_ecg_with_ext)
+        header_layout.addWidget(self.btn_ecg_cleaning)
         header_layout.addWidget(self.btn_help)
         header_layout.addStretch()
 
@@ -717,180 +734,153 @@ class SyncGUI(QMainWindow):
 
         return layout
 
-
         #######################################################################
-        ###########          LAYOUT OF ECG CLEANING PAGE 1          ###########
+        ###########          LAYOUT OF ECG CLEANING MAIN PAGE       ###########
         #######################################################################
+    def create_ecg_cleaning_page(self):
+        layout_ecg_cleaning_page = QVBoxLayout()
 
-    def create_ecg_no_ext_page(self):
-        # Main vertical layout for the first page
-        layout_ecg_no_ext_page = QHBoxLayout()
-        
-        # Vertical layout on the left for the plotting and for the visualization of the cleaned data
-        layout_left_ecg_no_ext_page = QVBoxLayout()
+        layout_channel_selection_and_plot = QHBoxLayout()
+        layout_ecg_channels_selection = QVBoxLayout()
 
-        layout_channel_selection_cleaning = QHBoxLayout()
-        # Create a button to choose a channel for cleaning
-        self.btn_choose_channel = Button("Choose channel for cleaning", "lightyellow")
-        self.btn_choose_channel.clicked.connect(self.choose_channel_for_cleaning)
-        self.btn_choose_channel.setEnabled(False) # Should be enabled only when the file is loaded
-
+        # Choosing the intracranial channel to clean
+        layout_int_channel_selection_cleaning = QHBoxLayout()
+        self.btn_choose_int_channel_for_cleaning = Button("Choose intracranial channel to clean", "lightyellow")
+        self.btn_choose_int_channel_for_cleaning.clicked.connect(partial(choose_int_channel_for_cleaning, self)) 
+        self.btn_choose_int_channel_for_cleaning.setEnabled(False) # Should be enabled only when the files are synchronized
         # add a label to show the selected channel name
-        self.label_selected_channel = QLabel("No channel selected")
+        self.label_selected_int_channel = QLabel("No channel selected")
+        layout_int_channel_selection_cleaning.addWidget(self.btn_choose_int_channel_for_cleaning)
+        layout_int_channel_selection_cleaning.addWidget(self.label_selected_int_channel)
 
-        layout_channel_selection_cleaning.addWidget(self.btn_choose_channel)
-        layout_channel_selection_cleaning.addWidget(self.label_selected_channel)
+        # Choosing the external ECG channel to help cleaning
+        layout_ext_channel_selection_cleaning = QHBoxLayout()
+        self.btn_choose_ext_channel_for_cleaning = Button("If available, choose external ECG channel for better cleaning", "lightyellow")
+        self.btn_choose_ext_channel_for_cleaning.clicked.connect(partial(choose_ext_channel_for_cleaning, self))
+        self.btn_choose_ext_channel_for_cleaning.setEnabled(False) # Should be enabled only when the file is loaded
+        # add a label to show the selected channel name
+        self.label_selected_ext_channel = QLabel("No channel selected")
+        layout_ext_channel_selection_cleaning.addWidget(self.btn_choose_ext_channel_for_cleaning)
+        layout_ext_channel_selection_cleaning.addWidget(self.label_selected_ext_channel)        
 
-        layout_cleaning_method = QHBoxLayout()
+        # Add the filtering option:
+        layout_filtering_before_cleaning = QHBoxLayout()
+        # add a label to indicate filtering option:
+        self.label_filtering_option = QLabel("Low-pass :")
+        self.box_filtering_option = QLineEdit()
+        self.box_filtering_option.setEnabled(False)  # enable only when files are loaded
+        self.btn_validate_filtering = Button("Apply filter", "lightyellow")
+        self.btn_validate_filtering.clicked.connect(partial(validate_filtering, self)) # move to interactive script
+        self.btn_validate_filtering.setEnabled(False)  # enabled when int channel is loaded
 
-        # Create a button to clean the ecg artifact found, using the interpolation method (Perceive)
-        self.btn_start_ecg_cleaning = Button("Start ECG cleaning: interpolation method", "lightyellow")
-        self.btn_start_ecg_cleaning.clicked.connect(partial(start_ecg_cleaning_interpolation, self))
-        self.btn_start_ecg_cleaning.setEnabled(False) # Should be enabled only when the file is loaded
+        layout_filtering_before_cleaning.addWidget(self.label_filtering_option)
+        layout_filtering_before_cleaning.addWidget(self.box_filtering_option)
+        layout_filtering_before_cleaning.addWidget(self.btn_validate_filtering)
+        
+        # Add the plot button
+        self.btn_confirm_and_plot_channels = Button("Plot selected channels", "lightyellow")
+        self.btn_confirm_and_plot_channels.clicked.connect(partial(plot_overlapped_channels_ecg, self))
+        self.btn_confirm_and_plot_channels.setEnabled(False)
 
-        # Create a button to clean the ecg artifact found, using the template substraction method (Stam et al., 2023)
-        self.btn_start_ecg_cleaning_template_sub = Button("Start ECG cleaning: template substraction method", "lightyellow")
+
+        # Add to the main layout for channel selection:
+        layout_ecg_channels_selection.addLayout(layout_int_channel_selection_cleaning)
+        layout_ecg_channels_selection.addLayout(layout_ext_channel_selection_cleaning)
+        layout_ecg_channels_selection.addLayout(layout_filtering_before_cleaning)
+        layout_ecg_channels_selection.addWidget(self.btn_confirm_and_plot_channels)
+
+
+        # create the layout for the plotting area
+        layout_plot_original_signal = QVBoxLayout()
+        # add a matplotlib canvas to visualize the raw/filtered data
+        self.figure_overlapped, self.ax_overlapped = plt.subplots()
+        self.canvas_overlapped = FigureCanvas(self.figure_overlapped)
+
+        # Set up the interactive toolbar to plot the signal
+        self.toolbar_overlapped = Toolbar(self.canvas_overlapped, self)
+        self.toolbar_overlapped.setEnabled(False)
+
+        layout_plot_original_signal.addWidget(self.toolbar_overlapped)
+        layout_plot_original_signal.addWidget(self.canvas_overlapped)
+
+        layout_channel_selection_and_plot.addLayout(layout_ecg_channels_selection)
+        layout_channel_selection_and_plot.addLayout(layout_plot_original_signal)
+
+
+        layout_methods = QHBoxLayout()
+        # Insert button for the interpolation method
+        self.btn_start_ecg_cleaning_interpolation = Button("Interpolation method", "lightyellow")
+        self.btn_start_ecg_cleaning_interpolation.clicked.connect(partial(start_ecg_cleaning_interpolation, self))
+        self.btn_start_ecg_cleaning_interpolation.setEnabled(False) # Should be enabled only when the file is loaded
+
+        # Insert button for the template substraction method
+        self.btn_start_ecg_cleaning_template_sub = Button("Template substraction method", "lightyellow")
         self.btn_start_ecg_cleaning_template_sub.clicked.connect(partial(start_ecg_cleaning_template_sub, self))
         self.btn_start_ecg_cleaning_template_sub.setEnabled(False)
 
-        layout_cleaning_method.addWidget(self.btn_start_ecg_cleaning)
-        layout_cleaning_method.addWidget(self.btn_start_ecg_cleaning_template_sub)
+        # Insert button for the SVD method
+        self.btn_start_ecg_cleaning_svd = Button("Template substraction method", "lightyellow")
+        self.btn_start_ecg_cleaning_svd.clicked.connect(partial(start_ecg_cleaning_svd, self))
+        self.btn_start_ecg_cleaning_svd.setEnabled(False)
 
-        # add a matplotlib canvas to visualize the raw data
-        self.figure_ecg, self.ax_ecg = plt.subplots()
-        self.canvas_ecg = FigureCanvas(self.figure_ecg)
-        #self.canvas_ecg.setEnabled(False)  # Initially hidden
+        layout_methods.addWidget(self.btn_start_ecg_cleaning_interpolation)
+        layout_methods.addWidget(self.btn_start_ecg_cleaning_template_sub)
+        layout_methods.addWidget(self.btn_start_ecg_cleaning_svd)
 
-        # Set up the interactive toolbar to plot the signal
-        self.toolbar_ecg = NavigationToolbar(self.canvas_ecg, self)
-        self.toolbar_ecg.setEnabled(False)
-
-        # create a vertical layout below the plot to enter start and end times for the cleaning
-        layout_parameters = QVBoxLayout()
-        layout_parameters1 = QHBoxLayout() # first line of parameters
-
-
-        # Create a label for the parameters section:
-        self.label_parameters = QLabel("Parameters")
-        self.label_parameters.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
-        self.label_parameters.setStyleSheet("font-weight: bold; font-size: 18px;")
-
-        # Fill layout_parameters1 (first line):
-        self.label_start_time = QLabel("Start time for cleaning (s):")
-        self.box_start_time = QLineEdit()
-        self.box_start_time.setPlaceholderText("0")  # Set a placeholder text
-        self.box_start_time.setEnabled(False)  # Initially disabled
-        self.label_end_time = QLabel("End time for cleaning (s):")
-        self.box_end_time = QLineEdit()
-        self.box_end_time.setPlaceholderText("0")  # Set a placeholder text
-        self.box_end_time.setEnabled(False)  # Initially disabled
-        self.label_artifact_polarity = QLabel("Artifact polarity:")
-        
-        # add 2 radio buttons to select the artifact polarity:
-        self.radio_button_up = QRadioButton("Up")
-        self.radio_button_down = QRadioButton("Down")
-        self.radio_button_up.setChecked(True)  # Set the default selection to "Up"
-        self.radio_button_down.setChecked(False) 
-        
-        group_polarity = QButtonGroup(self)
-        group_polarity.addButton(self.radio_button_up)
-        group_polarity.addButton(self.radio_button_down)
-
-        self.label_thresh_ecg = QLabel("Threshold:")
-        self.box_thresh_ecg = QComboBox()
-        self.box_thresh_ecg.addItems(['95', '96', '97', '98', '99'])
-        self.box_thresh_ecg.setEnabled(False)
-        self.btn_validate_start_end_time = Button("Validate", "lightyellow")
-        self.btn_validate_start_end_time.clicked.connect(self.validate_start_end_time)
-        self.btn_validate_start_end_time.setEnabled(False)  # Initially disabled
-
-        # add a label to indicate filtering option:
-        self.label_filtering_option = QLabel("Low-pass filter: (better if StimOn)")
-        self.box_filtering_option = QLineEdit()
-        self.box_filtering_option.setEnabled(False)  # Initially disabled
-
-        layout_parameters.addWidget(self.label_parameters)
-        layout_parameters1.addWidget(self.label_start_time)
-        layout_parameters1.addWidget(self.box_start_time)
-        layout_parameters1.addWidget(self.label_end_time)
-        layout_parameters1.addWidget(self.box_end_time)
-        layout_parameters1.addWidget(self.label_artifact_polarity)
-        layout_parameters1.addWidget(self.radio_button_up)
-        layout_parameters1.addWidget(self.radio_button_down)
-        layout_parameters1.addWidget(self.label_thresh_ecg)
-        layout_parameters1.addWidget(self.box_thresh_ecg)
-        layout_parameters1.addWidget(self.label_filtering_option)
-        layout_parameters1.addWidget(self.box_filtering_option)
-
-        # combine all parameter layouts together in one main layout, and personalize background:
-        layout_parameters.addLayout(layout_parameters1)
-        layout_parameters.addWidget(self.btn_validate_start_end_time)
-        # Create a QWidget to hold the layout
-        parameters_widget = QWidget()
-        parameters_widget.setLayout(layout_parameters)
-
-        # Apply a background color via stylesheet
-        #parameters_widget.setStyleSheet("background-color: #d1d1d1")
-        parameters_widget.setStyleSheet("""
-            QWidget {
-                background-color: #d1d1d1;
-            }
-            QLineEdit {
-                background-color: white;
-            }
-            QComboBox {
-                background-color: white;                
-            }
-        """)
-
-        # add another matplotlib canvas to visualize the cleaned data
-        self.figure_ecg_clean, self.ax_ecg_clean = plt.subplots()
-        self.canvas_ecg_clean = FigureCanvas(self.figure_ecg_clean)
-        #self.canvas_ecg_clean.setEnabled(False)  # Initially hidden
-
-        # Set up the interactive toolbar to plot the cleaned signal
-        self.toolbar_ecg_clean = NavigationToolbar(self.canvas_ecg_clean, self)
-        self.toolbar_ecg_clean.setEnabled(False)
-
-        layout_left_ecg_no_ext_page.addLayout(layout_channel_selection_cleaning)
-        layout_left_ecg_no_ext_page.addWidget(self.toolbar_ecg)
-        layout_left_ecg_no_ext_page.addWidget(self.canvas_ecg)  # Add the canvas to the layout
-        layout_left_ecg_no_ext_page.addWidget(parameters_widget)
-        layout_left_ecg_no_ext_page.addLayout(layout_cleaning_method)
-        layout_left_ecg_no_ext_page.addWidget(self.toolbar_ecg_clean)  # Add the toolbar to the layout
-        layout_left_ecg_no_ext_page.addWidget(self.canvas_ecg_clean)  # Add the canvas to the layout
-
-        layout_right_ecg_no_ext_page = QVBoxLayout()
-
-        # Create a Header for the right panel
-        self.label_ecg_artifact = QLabel("Verification tools")
-        self.label_ecg_artifact.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
-        self.label_ecg_artifact.setStyleSheet("font-weight: bold; font-size: 18px;")
-
-        # Create a button to show the detected peaks
-        self.btn_show_detected_peaks = Button("Show detected peaks", "lightyellow")
-        #self.btn_show_detected_peaks.clicked.connect(self.show_detected_peaks)
-        self.btn_show_detected_peaks.setEnabled(False) # Should be enabled only when self.dataset_intra.ecg is not None
+        # Layout for the first row of plots
+        layout_plots1 = QHBoxLayout()
+        layout_plots1_left = QVBoxLayout()
+        layout_plots1_right = QVBoxLayout()
 
         # Add a canvas to visualize the detected peaks
         self.figure_detected_peaks, self.ax_detected_peaks = plt.subplots()
         self.canvas_detected_peaks = FigureCanvas(self.figure_detected_peaks)
-        #self.canvas_detected_peaks.setEnabled(False)  # Initially hidden
 
         # Add a toolbar to visualize the detected peaks
-        self.toolbar_detected_peaks = NavigationToolbar(self.canvas_detected_peaks, self)
+        self.toolbar_detected_peaks = Toolbar(self.canvas_detected_peaks, self)
         self.toolbar_detected_peaks.setEnabled(False)
 
-        # Create a button to plot the ECG artifact detected after cleaning
-        self.btn_plot_ecg_artifact = Button("Plot ECG artifact detected after cleaning", "lightyellow")
-        #self.btn_plot_ecg_artifact.clicked.connect(self.plot_ecg_artifact)
-        self.btn_plot_ecg_artifact.setEnabled(False) # Should be enabled only when self.dataset_intra.ecg is not None
+        layout_plots1_left.addWidget(self.toolbar_detected_peaks)
+        layout_plots1_left.addWidget(self.canvas_detected_peaks)  
+
+        # Add a canvas to visualize the raw and cleaned signals overlapped
+        # add another matplotlib canvas to visualize the cleaned data
+        self.figure_ecg_clean, self.ax_ecg_clean = plt.subplots()
+        self.canvas_ecg_clean = FigureCanvas(self.figure_ecg_clean)
+
+        # Set up the interactive toolbar to plot the cleaned signal
+        self.toolbar_ecg_clean = Toolbar(self.canvas_ecg_clean, self)
+        self.toolbar_ecg_clean.setEnabled(False)
+
+        layout_plots1_right.addWidget(self.toolbar_ecg_clean)
+        layout_plots1_right.addWidget(self.canvas_ecg_clean)
+
+        layout_plots1.addLayout(layout_plots1_left)
+        layout_plots1.addLayout(layout_plots1_right)
+
+        # Layout for the second row of plots
+        layout_plots2 = QHBoxLayout()
+        layout_plots2_left = QVBoxLayout()
+        layout_plots2_middle = QVBoxLayout()
+        layout_plots2_right = QVBoxLayout()
 
         # add a matplotlib canvas to visualize the ECG artifact detected
         self.figure_ecg_artifact, self.ax_ecg_artifact = plt.subplots()
         self.canvas_ecg_artifact = FigureCanvas(self.figure_ecg_artifact)
-        self.toolbar_ecg_artifact = NavigationToolbar(self.canvas_ecg_artifact, self)
+        self.toolbar_ecg_artifact = Toolbar(self.canvas_ecg_artifact, self)
+        self.toolbar_ecg_artifact.setEnabled(False)
+        layout_plots2_left.addWidget(self.toolbar_ecg_artifact)
+        layout_plots2_left.addWidget(self.canvas_ecg_artifact)
 
+        # add a matplotlib canvas to visualize the power spectrum of the raw and cleaned channel
+        self.figure_psd, self.ax_psd = plt.subplots()
+        self.canvas_psd = FigureCanvas(self.figure_psd)
+        self.toolbar_psd = Toolbar(self.canvas_psd, self)
+        self.toolbar_psd.setEnabled(False)
+        layout_plots2_middle.addWidget(self.toolbar_psd)
+        layout_plots2_middle.addWidget(self.canvas_psd)
+
+        # add a summary of the heart rate found, and a button to confirm the cleaning
         # Display the computed heart rate:
         self.label_heart_rate_lfp = QLabel('Heart Rate:')
 
@@ -899,205 +889,26 @@ class SyncGUI(QMainWindow):
         self.btn_confirm_cleaning.clicked.connect(self.confirm_cleaning)
         self.btn_confirm_cleaning.setEnabled(False) # Should be enabled only when self.dataset_intra.ecg is not None
 
-        layout_right_ecg_no_ext_page.addWidget(self.label_ecg_artifact)
-        layout_right_ecg_no_ext_page.addWidget(self.toolbar_detected_peaks)  # Add the toolbar to the layout
-        layout_right_ecg_no_ext_page.addWidget(self.canvas_detected_peaks)  # Add the canvas to the layout
-        layout_right_ecg_no_ext_page.addWidget(self.toolbar_ecg_artifact)
-        layout_right_ecg_no_ext_page.addWidget(self.canvas_ecg_artifact)  # Add the canvas to the layout
-        layout_right_ecg_no_ext_page.addWidget(self.label_heart_rate_lfp)
-        layout_right_ecg_no_ext_page.addWidget(self.btn_confirm_cleaning)
+        layout_plots2_right.addWidget(self.label_heart_rate_lfp)
+        layout_plots2_right.addWidget(self.btn_confirm_cleaning)
 
-        # Add the horizontal panel layout to the main layout
-        layout_ecg_no_ext_page.addLayout(layout_left_ecg_no_ext_page, stretch=1)
-        layout_ecg_no_ext_page.addLayout(layout_right_ecg_no_ext_page, stretch=1)
+        layout_plots2.addLayout(layout_plots2_left)
+        layout_plots2.addLayout(layout_plots2_middle)
+        layout_plots2.addLayout(layout_plots2_right)
 
-        # Create the first page widget and set the layout
-        ecg_no_ext_page_widget = QWidget()
-        ecg_no_ext_page_widget.setLayout(layout_ecg_no_ext_page)
-
-        return ecg_no_ext_page_widget
-
-        #######################################################################
-        ###########          LAYOUT OF ECG CLEANING PAGE 2          ###########
-        #######################################################################
-
-    def create_ecg_with_ext_page(self):
-        # Main vertical layout for the first page
-        layout_ecg_with_ext_page = QHBoxLayout()
-        
-        # Vertical layout on the left for the plotting and for the visualization of the cleaned data
-        layout_left_ecg_with_ext_page = QVBoxLayout()
-        layout_channel_selection_and_plot = QHBoxLayout()
-        layout_ext_int_channels_selection_cleaning_with_ext = QVBoxLayout()
-
-        # Choosing the intracranial channel to clean
-        layout_int_channel_selection_cleaning_with_ext = QHBoxLayout()
-        self.btn_choose_channel_with_ext = Button("Choose intracranial channel to clean", "lightyellow")
-        self.btn_choose_channel_with_ext.clicked.connect(self.choose_int_channel_for_cleaning_with_ext)
-        self.btn_choose_channel_with_ext.setEnabled(False) # Should be enabled only when the file is loaded
-        # add a label to show the selected channel name
-        self.label_selected_channel_with_ext = QLabel("No channel selected")
-        layout_int_channel_selection_cleaning_with_ext.addWidget(self.btn_choose_channel_with_ext)
-        layout_int_channel_selection_cleaning_with_ext.addWidget(self.label_selected_channel_with_ext)
-
-        # Choosing the external ECG channel to help cleaning
-        layout_ext_channel_selection_cleaning_with_ext = QHBoxLayout()
-        self.btn_choose_ext_channel_with_ext = Button("Choose external ECG channel for cleaning", "lightyellow")
-        self.btn_choose_ext_channel_with_ext.clicked.connect(self.choose_ext_channel_for_cleaning_with_ext)
-        self.btn_choose_ext_channel_with_ext.setEnabled(False) # Should be enabled only when the file is loaded
-        # add a label to show the selected channel name
-        self.label_selected_ext_channel_with_ext = QLabel("No channel selected")
-        layout_ext_channel_selection_cleaning_with_ext.addWidget(self.btn_choose_ext_channel_with_ext)
-        layout_ext_channel_selection_cleaning_with_ext.addWidget(self.label_selected_ext_channel_with_ext)        
-
-        # Add to the main layout for channel selection:
-        layout_ext_int_channels_selection_cleaning_with_ext.addLayout(layout_int_channel_selection_cleaning_with_ext)
-        layout_ext_int_channels_selection_cleaning_with_ext.addLayout(layout_ext_channel_selection_cleaning_with_ext)
-
-        self.btn_confirm_and_plot_channels = Button("Plot overlapped selected channels", "lightyellow")
-        self.btn_confirm_and_plot_channels.clicked.connect(partial(plot_overlapped_channels_ecg, self))
-        self.btn_confirm_and_plot_channels.setEnabled(False)
-
-        layout_channel_selection_and_plot.addLayout(layout_ext_int_channels_selection_cleaning_with_ext)
-        layout_channel_selection_and_plot.addWidget(self.btn_confirm_and_plot_channels)
-
-        # add a matplotlib canvas to visualize the raw data
-        self.figure_overlapped, self.ax_overlapped = plt.subplots()
-        self.canvas_overlapped = FigureCanvas(self.figure_overlapped)
-
-        # Set up the interactive toolbar to plot the signal
-        self.toolbar_overlapped = NavigationToolbar(self.canvas_overlapped, self)
-        self.toolbar_overlapped.setEnabled(True)
-
-        # create a vertical layout below the plot to enter start and end times for the cleaning
-        layout_parameters = QVBoxLayout()
-        layout_parameters1 = QHBoxLayout() # first line of parameters
-
-
-        # Create a label for the parameters section:
-        self.label_parameters_with_ext = QLabel("Parameters")
-        self.label_parameters_with_ext.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
-        self.label_parameters_with_ext.setStyleSheet("font-weight: bold; font-size: 18px;")
-
-        # add a label to indicate filtering option:
-        self.label_filtering_option_with_ext = QLabel("Low-pass filter: (better if StimOn)")
-        self.box_filtering_option_with_ext = QLineEdit()
-        self.box_filtering_option_with_ext.setEnabled(False)  # Initially disabled
-
-        self.btn_validate_filtering_with_ext = Button("Validate", "lightyellow")
-        self.btn_validate_filtering_with_ext.clicked.connect(self.validate_filtering_with_ext)
-        self.btn_validate_filtering_with_ext.setEnabled(False)  # Initially disabled
-
-        layout_parameters.addWidget(self.label_parameters_with_ext)
-        layout_parameters1.addWidget(self.label_filtering_option_with_ext)
-        layout_parameters1.addWidget(self.box_filtering_option_with_ext)
-        layout_parameters1.addWidget(self.btn_validate_filtering_with_ext)
-
-        self.label_filter_display_with_ext = QLabel("No filtering option selected")
-
-        # combine all parameter layouts together in one main layout, and personalize background:
-        layout_parameters.addLayout(layout_parameters1)
-        layout_parameters.addWidget(self.label_filter_display_with_ext)
-        # Create a QWidget to hold the layout
-        parameters_widget = QWidget()
-        parameters_widget.setLayout(layout_parameters)
-
-        # Apply a background color via stylesheet
-        #parameters_widget.setStyleSheet("background-color: #d1d1d1")
-        parameters_widget.setStyleSheet("""
-            QWidget {
-                background-color: #d1d1d1;
-            }
-            QLineEdit {
-                background-color: white;
-            }
-            QComboBox {
-                background-color: white;                
-            }
-        """)
-
-        layout_cleaning_method_with_ext = QHBoxLayout()
-
-        # Create a button to clean the ecg artifact found, using the interpolation method (Perceive)
-        self.btn_start_ecg_cleaning_with_ext = Button("Start ECG cleaning: interpolation method", "lightyellow")
-        self.btn_start_ecg_cleaning_with_ext.clicked.connect(partial(start_ecg_cleaning_interpolation_with_ext, self))
-        self.btn_start_ecg_cleaning_with_ext.setEnabled(False) # Should be enabled only when the file is loaded
-
-        # Create a button to clean the ecg artifact found, using the template substraction method (Stam et al., 2023)
-        self.btn_start_ecg_cleaning_template_sub_with_ext = Button("Start ECG cleaning: template substraction method", "lightyellow")
-        self.btn_start_ecg_cleaning_template_sub_with_ext.clicked.connect(partial(start_ecg_cleaning_template_sub_with_ext, self))
-        self.btn_start_ecg_cleaning_template_sub_with_ext.setEnabled(False)
-
-        # Create a button to clean the ecg artifact found, using the SVD method (Stam et al., 2023)
-        self.btn_start_ecg_cleaning_svd_with_ext = Button("Start ECG cleaning: SVD method", "lightyellow")
-        self.btn_start_ecg_cleaning_svd_with_ext.clicked.connect(partial(start_ecg_cleaning_svd_with_ext, self))
-        self.btn_start_ecg_cleaning_svd_with_ext.setEnabled(False)
-
-        layout_cleaning_method_with_ext.addWidget(self.btn_start_ecg_cleaning_with_ext)
-        layout_cleaning_method_with_ext.addWidget(self.btn_start_ecg_cleaning_template_sub_with_ext)
-        layout_cleaning_method_with_ext.addWidget(self.btn_start_ecg_cleaning_svd_with_ext)
-
-        # add another matplotlib canvas to visualize the cleaned data
-        self.figure_ecg_clean_with_ext, self.ax_ecg_clean_with_ext = plt.subplots()
-        self.canvas_ecg_clean_with_ext = FigureCanvas(self.figure_ecg_clean_with_ext)
-        #self.canvas_ecg_clean.setEnabled(False)  # Initially hidden
-
-        # Set up the interactive toolbar to plot the cleaned signal
-        self.toolbar_ecg_clean_with_ext = NavigationToolbar(self.canvas_ecg_clean_with_ext, self)
-        self.toolbar_ecg_clean_with_ext.setEnabled(False)
-
-        layout_left_ecg_with_ext_page.addLayout(layout_channel_selection_and_plot)
-        layout_left_ecg_with_ext_page.addWidget(self.toolbar_overlapped)
-        layout_left_ecg_with_ext_page.addWidget(self.canvas_overlapped)  # Add the canvas to the layout
-        layout_left_ecg_with_ext_page.addWidget(parameters_widget)
-        layout_left_ecg_with_ext_page.addLayout(layout_cleaning_method_with_ext)
-        layout_left_ecg_with_ext_page.addWidget(self.toolbar_ecg_clean_with_ext)  # Add the toolbar to the layout
-        layout_left_ecg_with_ext_page.addWidget(self.canvas_ecg_clean_with_ext)  # Add the canvas to the layout
-
-        layout_right_ecg_with_ext_page = QVBoxLayout()
-
-        # Create a Header for the right panel
-        self.label_ecg_artifact_with_ext = QLabel("Verification tools")
-        self.label_ecg_artifact_with_ext.setAlignment(PyQt5.QtCore.Qt.AlignCenter)
-        self.label_ecg_artifact_with_ext.setStyleSheet("font-weight: bold; font-size: 18px;")
-
-        self.figure_detected_peaks_with_ext, self.ax_detected_peaks_with_ext = plt.subplots()
-        self.canvas_detected_peaks_with_ext = FigureCanvas(self.figure_detected_peaks_with_ext)
-
-        # Add a toolbar to visualize the detected peaks
-        self.toolbar_detected_peaks_with_ext = NavigationToolbar(self.canvas_detected_peaks_with_ext, self)
-        self.toolbar_detected_peaks_with_ext.setEnabled(False)
-
-        # add a matplotlib canvas to visualize the ECG artifact detected
-        self.figure_ecg_artifact_with_ext, self.ax_ecg_artifact_with_ext = plt.subplots()
-        self.canvas_ecg_artifact_with_ext = FigureCanvas(self.figure_ecg_artifact_with_ext)
-        self.toolbar_ecg_artifact_with_ext = NavigationToolbar(self.canvas_ecg_artifact_with_ext, self)
-
-        # Display the computed heart rate:
-        self.label_heart_rate_lfp_with_ext = QLabel('Heart Rate:')
-
-        # Create a button to confirm the cleaning and continue with the synchronization
-        self.btn_confirm_cleaning_with_ext = Button("Confirm cleaning and keep cleaned channel", "lightyellow")
-        self.btn_confirm_cleaning_with_ext.clicked.connect(self.confirm_cleaning_with_ext)
-        self.btn_confirm_cleaning_with_ext.setEnabled(False) # Should be enabled only when self.dataset_intra.ecg is not None
-
-        layout_right_ecg_with_ext_page.addWidget(self.label_ecg_artifact_with_ext)
-        layout_right_ecg_with_ext_page.addWidget(self.toolbar_detected_peaks_with_ext)  # Add the toolbar to the layout
-        layout_right_ecg_with_ext_page.addWidget(self.canvas_detected_peaks_with_ext)  # Add the canvas to the layout
-        layout_right_ecg_with_ext_page.addWidget(self.toolbar_ecg_artifact_with_ext)
-        layout_right_ecg_with_ext_page.addWidget(self.canvas_ecg_artifact_with_ext)  # Add the canvas to the layout
-        layout_right_ecg_with_ext_page.addWidget(self.label_heart_rate_lfp_with_ext)
-        layout_right_ecg_with_ext_page.addWidget(self.btn_confirm_cleaning_with_ext)
-
-        # Add the horizontal panel layout to the main layout
-        layout_ecg_with_ext_page.addLayout(layout_left_ecg_with_ext_page, stretch=1)
-        layout_ecg_with_ext_page.addLayout(layout_right_ecg_with_ext_page, stretch=1)
+        layout_ecg_cleaning_page.addLayout(layout_channel_selection_and_plot)
+        layout_ecg_cleaning_page.addLayout(layout_methods)
+        layout_ecg_cleaning_page.addLayout(layout_plots1)
+        layout_ecg_cleaning_page.addLayout(layout_plots2)
 
         # Create the first page widget and set the layout
-        ecg_with_ext_page_widget = QWidget()
-        ecg_with_ext_page_widget.setLayout(layout_ecg_with_ext_page)
+        ecg_cleaning_page_widget = QWidget()
+        ecg_cleaning_page_widget.setLayout(layout_ecg_cleaning_page)
 
-        return ecg_with_ext_page_widget        
+        return ecg_cleaning_page_widget
+
+
+
 
         #######################################################################
         #                     ORDERING AND CALLING GUI PAGES                  #
@@ -1106,6 +917,13 @@ class SyncGUI(QMainWindow):
     def show_home_page(self):
         self.stacked_widget.setCurrentIndex(0)
         self.update_button_styles(self.btn_home)
+
+
+    def show_timeshift_page(self):
+        self.stacked_widget.setCurrentIndex(1)
+        self.update_button_styles(self.btn_timeshift)
+        self.update_plot_sync_channels_state()
+
 
     def show_effective_sf_page(self):
         self.stacked_widget.setCurrentIndex(2)
@@ -1119,18 +937,10 @@ class SyncGUI(QMainWindow):
             self.button_select_first_extra.setEnabled(True)
             self.button_select_last_extra.setEnabled(True)        
 
-    def show_timeshift_page(self):
-        self.stacked_widget.setCurrentIndex(1)
-        self.update_button_styles(self.btn_timeshift)
-        self.update_plot_sync_channels_state()
 
-    def show_ecg_no_ext_page(self):
+    def show_ecg_cleaning_page(self):
         self.stacked_widget.setCurrentIndex(3)
-        self.update_button_styles(self.btn_ecg_no_ext)
-
-    def show_ecg_with_ext_page(self):
-        self.stacked_widget.setCurrentIndex(4)
-        self.update_button_styles(self.btn_ecg_with_ext)
+        self.update_button_styles(self.btn_ecg_cleaning)
 
     def show_help(self):
         # Path to the HTML file stored in the GUI folder
@@ -1146,43 +956,6 @@ class SyncGUI(QMainWindow):
         #                           CHOOSING FUNCTIONS                        #
         #######################################################################
 
-    def choose_int_channel_for_cleaning_with_ext(self):
-        """Prompt for channel name selection for intracranial file."""
-        try:
-            if self.dataset_intra.synced_data:
-                channel_names = self.dataset_intra.ch_names  # List of channel names
-                channel_name, ok = QInputDialog.getItem(self, "Channel Selection", "Select a channel:", channel_names, 0, False)
-
-                if ok and channel_name:  # Check if a channel was selected
-                    self.dataset_intra.selected_channel_name_ecg = channel_name
-                    self.dataset_intra.selected_channel_index_ecg = channel_names.index(channel_name)  # Get the index of the selected channel
-                    self.label_selected_channel_with_ext.setText(f"Selected Channel: {channel_name}")    
-                
-                if self.dataset_extra.selected_channel_name_ecg is not None:
-                    self.btn_confirm_and_plot_channels.setEnabled(True)    
-                        
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to select channel: {e}")
-
-
-    def choose_ext_channel_for_cleaning_with_ext(self):
-        """Prompt for channel name selection for intracranial file."""
-        try:
-            if self.dataset_extra.synced_data:
-                channel_names = self.dataset_extra.ch_names  # List of channel names
-                channel_name, ok = QInputDialog.getItem(self, "Channel Selection", "Select a channel:", channel_names, 0, False)
-
-                if ok and channel_name:  # Check if a channel was selected
-                    self.dataset_extra.selected_channel_name_ecg = channel_name
-                    self.dataset_extra.selected_channel_index_ecg = channel_names.index(channel_name)  # Get the index of the selected channel
-                    self.label_selected_ext_channel_with_ext.setText(f"Selected Channel: {channel_name}")    
-                
-                if self.dataset_intra.selected_channel_name_ecg is not None:
-                    self.btn_confirm_and_plot_channels.setEnabled(True)   
-                        
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to select channel: {e}")
-
 
     def choose_channel_for_cleaning(self):
         """Prompt for channel name selection for intracranial file."""
@@ -1194,7 +967,8 @@ class SyncGUI(QMainWindow):
                 if ok and channel_name:  # Check if a channel was selected
                     self.dataset_intra.selected_channel_name_ecg = channel_name
                     self.dataset_intra.selected_channel_index_ecg = channel_names.index(channel_name)  # Get the index of the selected channel
-                    self.label_selected_channel.setText(f"Selected Channel: {channel_name}")                
+                    self.label_selected_channel.setText(f"Selected Channel: {channel_name}")     
+                    self.btn_confirm_and_plot_channels.setEnabled(True)            
 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to select channel: {e}")
@@ -1225,6 +999,7 @@ class SyncGUI(QMainWindow):
 
 
     def confirm_cleaning(self):
+        self.dataset_intra.flag_cleaned = True
         if self.dataset_intra.selected_channel_index_ecg == 0:
             # Replace the corresponding channel's data with the cleaned data
             self.dataset_intra.synced_data._data[0,:] = self.dataset_intra.cleaned_ecg_left
@@ -1378,8 +1153,8 @@ class SyncGUI(QMainWindow):
         self.dataset_extra.synced_data = TMSi_rec_offset
 
         self.label_sync_confirmed.setText("Confirmed, you can now save directly, or clean ECG artifacts")
-        self.btn_choose_channel_with_ext.setEnabled(True)
-        self.btn_choose_ext_channel_with_ext.setEnabled(True)
+        self.btn_choose_int_channel_for_cleaning.setEnabled(True)
+        self.btn_choose_ext_channel_for_cleaning.setEnabled(True)
 
         if self.dataset_extra.file_name.endswith(".xdf"):
             self.btn_sync_as_set.setEnabled(True)
@@ -1429,7 +1204,7 @@ class SyncGUI(QMainWindow):
 
     def update_button_styles(self, active_button):
         # Set custom property to determine which button is active
-        buttons = [self.btn_home, self.btn_effective_sf, self.btn_timeshift, self.btn_ecg_no_ext, self.btn_ecg_with_ext]
+        buttons = [self.btn_home, self.btn_effective_sf, self.btn_timeshift, self.btn_ecg_cleaning]
         for button in buttons:
             button.setProperty("active", button == active_button)
             button.style().unpolish(button)

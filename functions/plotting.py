@@ -175,39 +175,36 @@ def plot_overlapped_channels_ecg(self):
     self.canvas_overlapped.setEnabled(True)
     self.ax_overlapped.clear()
 
-    # Plot the external channel synchronized
-    data_extra = self.dataset_extra.synced_data.get_data()[self.dataset_extra.selected_channel_index_ecg]
-    data_extra_scaled = data_extra
+    # Plot the external channel synchronized if one was selected:
+    if self.dataset_extra.selected_channel_name_ecg is not None:
+        data_extra = self.dataset_extra.synced_data.get_data()[self.dataset_extra.selected_channel_index_ecg]
+        data_extra_scaled = data_extra
 
-    # Apply 0.1 Hz-100Hz band-pass filter to ECG data
-    b, a = scipy.signal.butter(1, 0.05, "highpass")
-    detrended_data = scipy.signal.filtfilt(b, a, data_extra_scaled)
-    low_cutoff = 100.0  # Hz
-    b2, a2 = scipy.signal.butter(
-        N=4,  # Filter order
-        Wn=low_cutoff,
-        btype="lowpass",
-        fs=self.dataset_extra.sf 
-    )
-    ecg_data = scipy.signal.filtfilt(b2, a2, detrended_data)
-    timescale_extra = np.linspace(0, self.dataset_extra.synced_data.get_data().shape[1]/self.dataset_extra.sf, self.dataset_extra.synced_data.get_data().shape[1])
+        # Apply 0.1 Hz-100Hz band-pass filter to ECG data
+        b, a = scipy.signal.butter(1, 0.05, "highpass")
+        detrended_data = scipy.signal.filtfilt(b, a, data_extra_scaled)
+        low_cutoff = 100.0  # Hz
+        b2, a2 = scipy.signal.butter(
+            N=4,  # Filter order
+            Wn=low_cutoff,
+            btype="lowpass",
+            fs=self.dataset_extra.sf 
+        )
+        ecg_data = scipy.signal.filtfilt(b2, a2, detrended_data)
+        timescale_extra = np.linspace(0, self.dataset_extra.synced_data.get_data().shape[1]/self.dataset_extra.sf, self.dataset_extra.synced_data.get_data().shape[1])
 
-    self.ax_overlapped.plot(timescale_extra, ecg_data, color='#90EE90', label='External ECG channel')
-    
+        self.ax_overlapped.plot(timescale_extra, ecg_data, color='#90EE90', label='External ECG channel')
+        
     # Plot the intracranial channel synchronized
     data_intra = self.dataset_intra.synced_data.get_data()[self.dataset_intra.selected_channel_index_ecg]
-    print(len(data_intra))
     timescale_intra = np.linspace(0, self.dataset_intra.synced_data.get_data().shape[1]/self.dataset_intra.sf, self.dataset_intra.synced_data.get_data().shape[1])
-    print(len(timescale_intra))
     self.ax_overlapped.plot(timescale_intra, data_intra, color='#6495ED', label='Intracranial channel to clean')
     self.ax_overlapped.legend(loc='upper left')
     self.canvas_overlapped.draw()
 
-    self.box_filtering_option_with_ext.setEnabled(True)
-    self.btn_validate_filtering_with_ext.setEnabled(True)
-    self.btn_start_ecg_cleaning_with_ext.setEnabled(True)
-    self.btn_start_ecg_cleaning_template_sub_with_ext.setEnabled(True)
-    self.btn_start_ecg_cleaning_svd_with_ext.setEnabled(True)
+    self.btn_start_ecg_cleaning_interpolation.setEnabled(True)
+    self.btn_start_ecg_cleaning_template_sub.setEnabled(True)
+    self.btn_start_ecg_cleaning_svd.setEnabled(True)
 
 
 def plot_scatter_channel_intra_sf(self):

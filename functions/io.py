@@ -37,8 +37,7 @@ def load_mat_file(self):
             # Show channel selection and plot buttons for intracranial
             self.btn_select_channel_intra.setEnabled(True)
             self.channel_label_intra.setEnabled(True)
-            self.btn_choose_channel.setEnabled(True)
-            
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load .mat file: {e}")
 
@@ -177,7 +176,8 @@ def save_datasets_as_set(self):
 
     external_title = ("SYNCHRONIZED_EXTERNAL_" + str(self.dataset_extra.file_name[:-4]) + ".set")
 
-    if len(self.dataset_intra.synced_data.ch_names) > 6:
+    #if len(self.dataset_intra.synced_data.ch_names) > 6:
+    if self.dataset_intra.flag_cleaned == True:
         lfp_title = ("SYNCHRONIZED_INTRACRANIAL_CLEANED_" + str(self.dataset_intra.file_name[:-4]) + ".set")
     else:
         lfp_title = ("SYNCHRONIZED_INTRACRANIAL_" + str(self.dataset_intra.file_name[:-4]) + ".set")

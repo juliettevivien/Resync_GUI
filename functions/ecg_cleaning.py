@@ -178,26 +178,40 @@ def find_r_peaks_based_on_ext_ecg(self, full_data, times, window_artifact):
 
     # Calculate mean absolute values
     mean_abs_max = np.nanmean(np.abs(max_peaks)) if max_peaks else 0
+    print(mean_abs_max)
     mean_abs_min = np.nanmean(np.abs(min_peaks)) if min_peaks else 0
+    print(mean_abs_min)
 
     # Choose the orientation with the higher mean absolute amplitude
     lfp_peak_indices = []
     polarity = None
     if mean_abs_max >= mean_abs_min:
         polarity = 'Up'
+        print(polarity)
         for idx in r_peaks_lfp_idx:
-            start = max(idx - window, 0)
-            end = min(idx + window + 1, len(full_data))
+            start = idx - window
+            end = idx + window + 1
+            # 4. Check signal boundaries
+            if start < 0 or end > len(full_data):
+                continue
             segment = full_data[start:end]
+            if np.isnan(segment).any():
+                continue
             local_max_idx = np.argmax(segment)
             peak_global_idx = start + local_max_idx
             lfp_peak_indices.append(peak_global_idx)
     else:
         polarity = 'Down'
+        print(polarity)
         for idx in r_peaks_lfp_idx:
-            start = max(idx - window, 0)
-            end = min(idx + window + 1, len(full_data))
+            start = idx - window
+            end = idx + window + 1
+            # 4. Check signal boundaries
+            if start < 0 or end > len(full_data):
+                continue
             segment = full_data[start:end]
+            if np.isnan(segment).any():
+                continue
             local_min_idx = np.argmin(segment)
             peak_global_idx = start + local_min_idx
             lfp_peak_indices.append(peak_global_idx)

@@ -819,7 +819,7 @@ class SyncGUI(QMainWindow):
         self.btn_start_ecg_cleaning_template_sub.setEnabled(False)
 
         # Insert button for the SVD method
-        self.btn_start_ecg_cleaning_svd = Button("Template substraction method", "lightyellow")
+        self.btn_start_ecg_cleaning_svd = Button("Singular Value Decomposition method", "lightyellow")
         self.btn_start_ecg_cleaning_svd.clicked.connect(partial(start_ecg_cleaning_svd, self))
         self.btn_start_ecg_cleaning_svd.setEnabled(False)
 
